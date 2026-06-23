@@ -22,7 +22,6 @@ export function useTreeMapInteraction() {
     y: 0,
     data: null,
   });
-  const [contextMenuNode, setContextMenuNode] = useState<FileNode | null>(null);
 
   const handleMouseEnter = useCallback((data: TooltipData, e: React.MouseEvent) => {
     setTooltip({ visible: true, x: e.clientX, y: e.clientY, data });
@@ -36,16 +35,10 @@ export function useTreeMapInteraction() {
     setTooltip((prev) => ({ ...prev, visible: false }));
   }, []);
 
-  const handleContextMenu = useCallback((node: FileNode) => {
-    setContextMenuNode(node);
-  }, []);
-
   return {
     tooltip,
-    contextMenuNode,
     handleMouseEnter,
     handleMouseMove,
     handleMouseLeave,
-    handleContextMenu,
   };
 }

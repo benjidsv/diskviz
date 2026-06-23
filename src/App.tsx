@@ -23,6 +23,7 @@ import ScanProgress from "@/components/ScanProgress";
 import NoticesModal from "@/components/NoticesModal";
 import { AccentPicker } from "@/components/AccentPicker";
 import { ThemePicker } from "@/components/ThemePicker";
+import { showBreadcrumbContextMenu } from "@/hooks/useNativeContextMenu";
 
 function App() {
   const [currentPath, setCurrentPath] = useState<string>("");
@@ -75,6 +76,16 @@ function App() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [showShortcuts]);
+
+  // Suppress the default WebView context menu everywhere in production
+  // so native right-clicks are handled exclusively by our Tauri menus.
+  // Kept off in dev mode so Inspect Element / DevTools remain accessible.
+  useEffect(() => {
+    if (import.meta.env.DEV) return;
+    const suppress = (e: MouseEvent) => e.preventDefault();
+    document.addEventListener("contextmenu", suppress);
+    return () => document.removeEventListener("contextmenu", suppress);
+  }, []);
 
   const handleFolderPicker = useCallback(async () => {
     try {
@@ -345,45 +356,51 @@ function App() {
         )}
 
         {summary && currentViewNode && (
-          <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-            {breadcrumbs.length >= 1 && (
-              <div className="flex items-center space-x-2 text-sm text-muted-foreground mb-2 overflow-x-auto flex-shrink-0">
-                {breadcrumbs.map((crumb, index) => (
-                  <React.Fragment key={crumb.id}>
-                    <button
-                      type="button"
-                      onClick={() => handleBreadcrumbClick(index)}
-                      className={`hover:text-foreground transition-colors whitespace-nowrap ${
-                        index === breadcrumbs.length - 1
-                          ? "text-foreground font-medium"
-                          : "hover:text-foreground"
-                      }`}
-                    >
-                      {crumb.name}
-                    </button>
-                    {index < breadcrumbs.length - 1 && <span>/</span>}
-                  </React.Fragment>
-                ))}
-              </div>
-            )}
-
-            <div className="flex-1 min-h-0 border border-border/60 rounded-lg p-6">
-              {visualizationType === "treemap" ? (
-                <TreeMapChart
-                  data={currentViewNode}
-                  rampStops={rampStops}
-                  onNodeDoubleClick={handleNodeDoubleClick}
-                  onNodeDeleted={handleNodeDeleted}
-                />
-              ) : (
-                <SunburstChart
-                  data={currentViewNode}
-                  onNodeDoubleClick={handleNodeDoubleClick}
-                  onNodeDeleted={handleNodeDeleted}
-                />
+            <div className="flex-1 min-h-0 border border-border/60 rounded-lg px-5 py-4 flex flex-col">
+              {breadcrumbs.length >= 1 && (
+                <div className="flex items-center text-xs text-muted-foreground pb-2 border-b border-border/40 mb-3 overflow-x-auto flex-shrink-0" style={{ userSelect: "none" }}>
+                  {breadcrumbs.map((crumb, index) => (
+                    <React.Fragment key={crumb.id}>
+                      <button
+                        type="button"
+                        onClick={() => handleBreadcrumbClick(index)}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          void showBreadcrumbContextMenu(crumb);
+                        }}
+                        className={`px-1.5 py-1 hover:text-foreground transition-colors whitespace-nowrap select-none ${
+                          index === breadcrumbs.length - 1
+                            ? "text-foreground font-medium cursor-default"
+                            : "hover:text-foreground cursor-pointer"
+                        }`}
+                      >
+                        {crumb.name}
+                      </button>
+                      {index < breadcrumbs.length - 1 && (
+                        <span className="text-muted-foreground/30 select-none">/</span>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </div>
               )}
+
+              <div className="flex-1 min-h-0">
+                {visualizationType === "treemap" ? (
+                  <TreeMapChart
+                    data={currentViewNode}
+                    rampStops={rampStops}
+                    onNodeDoubleClick={handleNodeDoubleClick}
+                    onNodeDeleted={handleNodeDeleted}
+                  />
+                ) : (
+                  <SunburstChart
+                    data={currentViewNode}
+                    onNodeDoubleClick={handleNodeDoubleClick}
+                    onNodeDeleted={handleNodeDeleted}
+                  />
+                )}
+              </div>
             </div>
-          </div>
         )}
 
         {!summary && !isScanning && (

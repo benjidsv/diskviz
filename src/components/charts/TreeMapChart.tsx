@@ -4,12 +4,11 @@ import { ResponsiveContainer, Treemap } from "recharts";
 import { useTreeMapData } from "@/hooks/useTreeMapData";
 import { useTreeMapInteraction } from "@/hooks/useTreeMapInteraction";
 import { formatFileSize } from "@/utils/formatters";
-import { openInFinder } from "@/lib/api";
 import { interpolateStops, readableInk, rgbToCss } from "@/lib/colorScale";
 import type { FileNode } from "@/types";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
-import { TreeMapContextMenu } from "./TreeMapContextMenu";
 import { TreeMapTooltip } from "./TreeMapTooltip";
+import { showNodeContextMenu } from "@/hooks/useNativeContextMenu";
 
 interface TreeMapChartProps {
   data: FileNode;
@@ -27,24 +26,20 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
   onNodeDeleted,
 }) => {
   const { data: treeMapData, maxSize, minSize, totalSize } = useTreeMapData(data);
-  const { tooltip, contextMenuNode, handleMouseEnter, handleMouseMove, handleMouseLeave, handleContextMenu } =
+  const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } =
     useTreeMapInteraction();
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedNode, setSelectedNode] = useState<FileNode | null>(null);
 
-  const handleOpenInFinder = useCallback(async (node: FileNode) => {
-    try {
-      await openInFinder(node.path);
-    } catch (error) {
-      console.error("Failed to open in finder:", error);
-    }
-  }, []);
-
   const handleDeleteClick = useCallback((node: FileNode) => {
     setSelectedNode(node);
     setDeleteDialogOpen(true);
   }, []);
+
+  const handleContextMenuEvent = useCallback(async (node: FileNode) => {
+    await showNodeContextMenu(node, handleDeleteClick);
+  }, [handleDeleteClick]);
 
   const handleDeleteConfirm = useCallback(() => {
     if (!selectedNode) return;
@@ -119,8 +114,9 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
       onNodeDoubleClick?.(originalNode);
     };
 
-    const handleContextMenuEvent = (_e: React.MouseEvent) => {
-      handleContextMenu(originalNode);
+    const handleRightClick = (e: React.MouseEvent) => {
+      e.preventDefault();
+      handleContextMenuEvent(originalNode);
     };
 
     const handleMouseEnterEvent = (e: React.MouseEvent) => {
@@ -141,7 +137,7 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
         style={{ cursor: "pointer", outline: "none" }}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
-        onContextMenu={handleContextMenuEvent}
+        onContextMenu={handleRightClick}
         onMouseEnter={handleMouseEnterEvent}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
@@ -209,38 +205,32 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
   }
 
   return (
-    <TreeMapContextMenu
-      node={contextMenuNode}
-      onOpenInFinder={handleOpenInFinder}
-      onDelete={handleDeleteClick}
-    >
-      <div className="h-full w-full relative">
-        <ResponsiveContainer width="100%" height="100%">
-          <Treemap
-            data={treeMapData || []}
-            dataKey="size"
-            aspectRatio={1}
-            content={CustomContent as never}
-            isAnimationActive={false}
-          />
-        </ResponsiveContainer>
-
-        <TreeMapTooltip
-          visible={tooltip.visible}
-          x={tooltip.x}
-          y={tooltip.y}
-          data={tooltip.data}
-          parentSize={totalSize}
+    <div className="h-full w-full relative">
+      <ResponsiveContainer width="100%" height="100%">
+        <Treemap
+          data={treeMapData || []}
+          dataKey="size"
+          aspectRatio={1}
+          content={CustomContent as never}
+          isAnimationActive={false}
         />
+      </ResponsiveContainer>
 
-        <DeleteConfirmDialog
-          open={deleteDialogOpen}
-          node={selectedNode}
-          onConfirm={handleDeleteConfirm}
-          onCancel={handleDeleteCancel}
-        />
-      </div>
-    </TreeMapContextMenu>
+      <TreeMapTooltip
+        visible={tooltip.visible}
+        x={tooltip.x}
+        y={tooltip.y}
+        data={tooltip.data}
+        parentSize={totalSize}
+      />
+
+      <DeleteConfirmDialog
+        open={deleteDialogOpen}
+        node={selectedNode}
+        onConfirm={handleDeleteConfirm}
+        onCancel={handleDeleteCancel}
+      />
+    </div>
   );
 };
 

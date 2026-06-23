@@ -1,13 +1,12 @@
 import type React from "react";
 import { useCallback, useMemo, useState } from "react";
 import { formatFileSize } from "@/utils/formatters";
-import { openInFinder } from "@/lib/api";
 import { hexToRgb, readableInk } from "@/lib/colorScale";
 import { useThemeSettings, VIZ_SUN_COLORS } from "@/hooks/useThemeSettings";
 import type { FileNode } from "@/types";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
-import { TreeMapContextMenu } from "./TreeMapContextMenu";
 import { TreeMapTooltip } from "./TreeMapTooltip";
+import { showNodeContextMenu } from "@/hooks/useNativeContextMenu";
 
 interface SunburstChartProps {
   data: FileNode;
@@ -43,7 +42,6 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
     data: null,
   });
 
-  const [contextMenuNode, setContextMenuNode] = useState<FileNode | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedNode, setSelectedNode] = useState<FileNode | null>(null);
 
@@ -164,22 +162,14 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
     setTooltip((prev) => ({ ...prev, visible: false }));
   }, []);
 
-  const handleContextMenu = useCallback((node: FileNode) => {
-    setContextMenuNode(node);
-  }, []);
-
-  const handleOpenInFinder = useCallback(async (node: FileNode) => {
-    try {
-      await openInFinder(node.path);
-    } catch (error) {
-      console.error("Failed to open in finder:", error);
-    }
-  }, []);
-
   const handleDeleteClick = useCallback((node: FileNode) => {
     setSelectedNode(node);
     setDeleteDialogOpen(true);
   }, []);
+
+  const handleContextMenuEvent = useCallback(async (node: FileNode) => {
+    await showNodeContextMenu(node, handleDeleteClick);
+  }, [handleDeleteClick]);
 
   const handleDeleteConfirm = useCallback(() => {
     if (!selectedNode) return;
@@ -213,18 +203,13 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
   const maxSize = data.size;
 
   return (
-    <TreeMapContextMenu
-      node={contextMenuNode}
-      onOpenInFinder={handleOpenInFinder}
-      onDelete={handleDeleteClick}
-    >
-      <div className="h-full w-full relative flex items-center justify-center">
-        <svg
-          viewBox="0 0 600 600"
-          className="max-h-full max-w-full"
-          role="img"
-          aria-label="Sunburst chart showing disk usage"
-        >
+    <div className="h-full w-full relative flex items-center justify-center">
+      <svg
+        viewBox="0 0 600 600"
+        className="max-h-full max-w-full"
+        role="img"
+        aria-label="Sunburst chart showing disk usage"
+      >
           <title>Disk usage sunburst chart</title>
           {sunburstNodes.map((sunburstNode, index) => {
             const { node, startAngle, endAngle, innerRadius, outerRadius, level } = sunburstNode;
@@ -258,8 +243,9 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
                     e.stopPropagation();
                     onNodeDoubleClick?.(node);
                   }}
-                  onContextMenu={(_e) => {
-                    handleContextMenu(node);
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    handleContextMenuEvent(node);
                   }}
                   onMouseEnter={(e) => handleMouseEnter(sunburstNode, e)}
                   onMouseMove={(e) => setTooltip((prev) => prev.visible ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
@@ -325,22 +311,21 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
           </text>
         </svg>
 
-        <TreeMapTooltip
-          visible={tooltip.visible}
-          x={tooltip.x}
-          y={tooltip.y}
-          data={tooltip.data}
-          parentSize={data.size}
-        />
+      <TreeMapTooltip
+        visible={tooltip.visible}
+        x={tooltip.x}
+        y={tooltip.y}
+        data={tooltip.data}
+        parentSize={data.size}
+      />
 
-        <DeleteConfirmDialog
-          open={deleteDialogOpen}
-          node={selectedNode}
-          onConfirm={handleDeleteConfirm}
-          onCancel={handleDeleteCancel}
-        />
-      </div>
-    </TreeMapContextMenu>
+      <DeleteConfirmDialog
+        open={deleteDialogOpen}
+        node={selectedNode}
+        onConfirm={handleDeleteConfirm}
+        onCancel={handleDeleteCancel}
+      />
+    </div>
   );
 };
 
