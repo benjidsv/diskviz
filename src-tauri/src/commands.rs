@@ -89,23 +89,31 @@ fn display_name(tree: &ScanTree, idx: u32) -> String {
     }
 }
 
-fn build_dto(tree: &ScanTree, idx: u32, depth_left: usize, max_children: usize) -> FileNodeDto {
+fn build_dto(
+    tree: &ScanTree,
+    idx: u32,
+    depth_left: usize,
+    max_children: usize,
+    offset: usize,
+) -> FileNodeDto {
     let node = &tree.nodes[idx as usize];
     let mut children = Vec::new();
     if node.is_dir && depth_left > 0 {
-        for &c in node.children.iter().take(max_children) {
-            children.push(build_dto(tree, c, depth_left - 1, max_children));
+        // `offset` paginates this node's (size-sorted) children so the UI can
+        // drill into the "Other" bucket. Nested levels always start at 0.
+        for &c in node.children.iter().skip(offset).take(max_children) {
+            children.push(build_dto(tree, c, depth_left - 1, max_children, 0));
         }
     }
     // Aggregate the immediate children that were truncated away so the UI can
     // render an "Other" bucket. Always reflects the full child list regardless
     // of `depth_left`, so a leaf-depth directory still reports what it hides.
-    let included = children.len();
-    let hidden_children = node.children.len().saturating_sub(included) as u64;
+    let consumed = offset + children.len();
+    let hidden_children = node.children.len().saturating_sub(consumed) as u64;
     let hidden_size: u64 = node
         .children
         .iter()
-        .skip(included)
+        .skip(consumed)
         .map(|&c| tree.nodes[c as usize].size)
         .sum();
     FileNodeDto {
@@ -189,6 +197,7 @@ pub fn get_subtree(
     node_id: String,
     max_depth: Option<usize>,
     max_children: Option<usize>,
+    offset: Option<usize>,
 ) -> Result<FileNodeDto, String> {
     let idx: u32 = node_id.parse().map_err(|_| "invalid node id".to_string())?;
     let guard = state.tree.lock().unwrap();
@@ -201,6 +210,7 @@ pub fn get_subtree(
         idx,
         max_depth.unwrap_or(3),
         max_children.unwrap_or(20),
+        offset.unwrap_or(0),
     ))
 }
 

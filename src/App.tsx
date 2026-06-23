@@ -18,6 +18,7 @@ import {
   validatePath,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { isOtherNode } from "@/hooks/useTreeMapData";
 import type { FileNode, ScanProgress as Progress, ScanSummary } from "@/types";
 import SunburstChart from "@/components/charts/SunburstChart";
 import TreeMapChart from "@/components/charts/TreeMapChart";
@@ -110,26 +111,56 @@ function App() {
     void cancelScan();
   }, []);
 
-  const handleNodeDoubleClick = useCallback(async (node: FileNode) => {
-    if (node.type !== "directory") return;
-    try {
-      const fresh = await getSubtree(node.id);
-      if (!fresh.children || fresh.children.length === 0) return;
-      setForwardStack([]);
-      setSelectedNode(null);
-      setCurrentViewNode(fresh);
-      setBreadcrumbs((prev) => [...prev, fresh]);
-    } catch (err) {
-      setError(String(err));
-    }
+  // Load a directory view. With offset > 0 it's an "Other" page (items past the
+  // current batch); we tag it as synthetic so navigation can re-page it and the
+  // breadcrumb can show it as "Other" without colliding with the real node id.
+  const loadView = useCallback(async (baseId: string, offset: number): Promise<FileNode> => {
+    const fresh = await getSubtree(baseId, 3, 20, offset);
+    if (offset <= 0) return fresh;
+    return {
+      ...fresh,
+      id: `${baseId}::other::${offset}`,
+      name: "Other",
+      overflowBaseId: baseId,
+      overflowOffset: offset,
+    };
   }, []);
+
+  // Re-fetch the view a navigation entry represents (handles "Other" pages too).
+  const refreshView = useCallback(
+    (node: FileNode) => loadView(node.overflowBaseId ?? node.id, node.overflowOffset ?? 0),
+    [loadView],
+  );
+
+  const handleNodeDoubleClick = useCallback(
+    async (node: FileNode) => {
+      if (node.type !== "directory") return;
+      const isOverflow = isOtherNode(node);
+      const baseId = isOverflow ? node.overflowBaseId : node.id;
+      const offset = isOverflow ? node.overflowOffset ?? 0 : 0;
+      if (!baseId) return;
+      try {
+        const fresh = await loadView(baseId, offset);
+        // Real directories that turn out empty aren't worth drilling into;
+        // an "Other" page always has children by construction.
+        if (!isOverflow && (!fresh.children || fresh.children.length === 0)) return;
+        setForwardStack([]);
+        setSelectedNode(null);
+        setCurrentViewNode(fresh);
+        setBreadcrumbs((prev) => [...prev, fresh]);
+      } catch (err) {
+        setError(String(err));
+      }
+    },
+    [loadView],
+  );
 
   const handleBreadcrumbClick = useCallback(
     async (index: number) => {
       const target = breadcrumbs[index];
       if (!target) return;
       try {
-        const fresh = await getSubtree(target.id);
+        const fresh = await refreshView(target);
         setForwardStack([]);
         setSelectedNode(null);
         setBreadcrumbs((prev) => prev.slice(0, index + 1));
@@ -138,7 +169,7 @@ function App() {
         setError(String(err));
       }
     },
-    [breadcrumbs],
+    [breadcrumbs, refreshView],
   );
 
   const handleNodeDeleted = useCallback(
@@ -147,7 +178,7 @@ function App() {
       try {
         const newSummary = await deleteNode(node.id);
         setSummary(newSummary);
-        const fresh = await getSubtree(currentViewNode.id);
+        const fresh = await refreshView(currentViewNode);
         setSelectedNode(null);
         setCurrentViewNode(fresh);
       } catch (error) {
@@ -155,7 +186,7 @@ function App() {
         void handleScanDirectory(scannedPath.current);
       }
     },
-    [currentViewNode, handleScanDirectory],
+    [currentViewNode, handleScanDirectory, refreshView],
   );
 
   const handleGoBack = useCallback(async () => {
@@ -163,7 +194,7 @@ function App() {
     const currentTip = breadcrumbs[breadcrumbs.length - 1];
     const target = breadcrumbs[breadcrumbs.length - 2];
     try {
-      const fresh = await getSubtree(target.id);
+      const fresh = await refreshView(target);
       setForwardStack((prev) => [currentTip, ...prev]);
       setBreadcrumbs((prev) => prev.slice(0, -1));
       setSelectedNode(null);
@@ -171,13 +202,13 @@ function App() {
     } catch (err) {
       setError(String(err));
     }
-  }, [breadcrumbs]);
+  }, [breadcrumbs, refreshView]);
 
   const handleGoForward = useCallback(async () => {
     if (forwardStack.length === 0) return;
     const [next, ...rest] = forwardStack;
     try {
-      const fresh = await getSubtree(next.id);
+      const fresh = await refreshView(next);
       setBreadcrumbs((prev) => [...prev, fresh]);
       setSelectedNode(null);
       setCurrentViewNode(fresh);
@@ -186,7 +217,7 @@ function App() {
       setError(String(err));
       setForwardStack([]);
     }
-  }, [forwardStack]);
+  }, [forwardStack, refreshView]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -369,7 +400,7 @@ function App() {
             onDismiss={() => setError(null)}
           />
         ) : hasScan ? (
-          <div className="flex-1 min-h-0 border border-border/60 rounded-lg p-4 flex flex-col">
+          <div className="flex-1 min-h-0 flex flex-col">
             <div className="flex-1 min-h-0">
               {visualizationType === "treemap" ? (
                 <TreeMapChart

@@ -113,9 +113,9 @@ export const TopBar: React.FC<TopBarProps> = ({
         <div className="readout flex items-center gap-2 text-xs text-muted-foreground shrink-0">
           <span className="tabular-nums">{formatFileSize(currentViewNode.size)}</span>
           <Dot />
-          <span className="tabular-nums">{currentViewNode.fileCount.toLocaleString()} F</span>
+          <span className="tabular-nums">{currentViewNode.fileCount.toLocaleString()} files</span>
           <Dot />
-          <span className="tabular-nums">{currentViewNode.dirCount.toLocaleString()} D</span>
+          <span className="tabular-nums">{currentViewNode.dirCount.toLocaleString()} folders</span>
           <Dot />
           <span className="tabular-nums">{formatDuration(summary.scanDurationMs)}</span>
         </div>

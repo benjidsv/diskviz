@@ -59,9 +59,9 @@ export const DetailReadout: React.FC<DetailReadoutProps> = ({
         {(node.fileCount > 0 || node.dirCount > 0) && (
           <>
             <Dot />
-            {node.fileCount.toLocaleString()} F
+            {node.fileCount.toLocaleString()} files
             <Dot />
-            {node.dirCount.toLocaleString()} D
+            {node.dirCount.toLocaleString()} folders
           </>
         )}
         {modified ? (

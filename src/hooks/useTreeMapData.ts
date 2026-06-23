@@ -30,10 +30,13 @@ export const useTreeMapData = (node: FileNode | null, maxItems = 20) => {
       }));
 
     // Honest remainder: the backend tells us how many immediate children it
-    // truncated and their combined size. Surface them as one "Other" tile so
-    // the treemap area still adds up to the directory total.
+    // truncated and their combined size. Surface them as one "Other" tile that
+    // drills into the next page (base node id + offset past what we've shown),
+    // so the treemap area still adds up to the directory total and stays explorable.
     if (node.hiddenChildren && node.hiddenChildren > 0 && (node.hiddenSize ?? 0) > 0) {
       const count = node.hiddenChildren;
+      const baseId = node.overflowBaseId ?? node.id;
+      const nextOffset = (node.overflowOffset ?? 0) + (node.children?.length ?? 0);
       const otherNode: FileNode = {
         id: OTHER_NODE_ID,
         name: `Other (${count.toLocaleString()} items)`,
@@ -42,6 +45,8 @@ export const useTreeMapData = (node: FileNode | null, maxItems = 20) => {
         size: node.hiddenSize ?? 0,
         fileCount: 0,
         dirCount: 0,
+        overflowBaseId: baseId,
+        overflowOffset: nextOffset,
       };
       shown.push({ name: "Other", size: otherNode.size, originalNode: otherNode });
     }

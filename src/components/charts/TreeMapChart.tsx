@@ -115,13 +115,13 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
     const handleDoubleClick = (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      if (isOther) return; // synthetic remainder tile — not navigable
+      // "Other" is drillable: App pages into the next batch of children.
       onNodeDoubleClick?.(originalNode);
     };
 
     const handleRightClick = (e: React.MouseEvent) => {
       e.preventDefault();
-      if (isOther) return; // no path to reveal/trash
+      if (isOther) return; // synthetic group — no single path to reveal/trash
       handleContextMenuEvent(originalNode);
     };
 
@@ -182,13 +182,13 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
               {label}
             </text>
 
-            {adjustedHeight > 60 && !isSmall && (
+            {adjustedHeight > 40 && adjustedWidth > 40 && (
               <text
                 x={adjustedX + adjustedWidth / 2}
                 y={adjustedY + adjustedHeight / 2 + fontSize / 2 + 4}
                 textAnchor="middle"
                 fill={inkColor}
-                fontSize={fontSize * 0.75}
+                fontSize={Math.max(9, fontSize * 0.75)}
                 fontWeight="500"
                 style={{
                   textShadow: `0 1px 2px rgba(0,0,0,0.3)`,

@@ -14,6 +14,10 @@ export interface FileNode {
   hiddenChildren?: number;
   /** Summed size of those truncated children, for the "Other" bucket. */
   hiddenSize?: number;
+  /** Set on a synthetic "Other" page view: the real node id to paginate. */
+  overflowBaseId?: string;
+  /** Set on a synthetic "Other" page view: the child offset to load from. */
+  overflowOffset?: number;
   lastModified?: number;
   isHidden?: boolean;
   permissions?: string;

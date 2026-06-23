@@ -10,9 +10,10 @@ export const scanDirectory = (path: string) =>
 /** Request cancellation of the in-flight scan. Rejects the scanDirectory call. */
 export const cancelScan = () => invoke<void>("cancel_scan");
 
-/** Pull a bounded slice of the scanned tree (kept in Rust) for rendering. */
-export const getSubtree = (nodeId: string, maxDepth = 3, maxChildren = 20) =>
-  invoke<FileNode>("get_subtree", { nodeId, maxDepth, maxChildren });
+/** Pull a bounded slice of the scanned tree (kept in Rust) for rendering.
+ * `offset` paginates the node's size-sorted children (for the "Other" bucket). */
+export const getSubtree = (nodeId: string, maxDepth = 3, maxChildren = 20, offset = 0) =>
+  invoke<FileNode>("get_subtree", { nodeId, maxDepth, maxChildren, offset });
 
 export const getHomeDirectory = () => invoke<string>("get_home_directory");
 
