@@ -1,0 +1,272 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+/* ─── Catppuccin Latte (light) ─────────────────────────────────────────── */
+.theme-latte {
+  /* shadcn semantic tokens */
+  --background:              #eff1f5; /* Base */
+  --foreground:              #4c4f69; /* Text */
+  --card:                    #e6e9ef; /* Mantle */
+  --card-foreground:         #4c4f69; /* Text */
+  --popover:                 #e6e9ef; /* Mantle */
+  --popover-foreground:      #4c4f69; /* Text */
+  --primary:                 #1e66f5; /* Blue */
+  --primary-foreground:      #eff1f5; /* Base */
+  --secondary:               #ccd0da; /* Surface 0 */
+  --secondary-foreground:    #4c4f69; /* Text */
+  --muted:                   #ccd0da; /* Surface 0 */
+  --muted-foreground:        #6c6f85; /* Subtext 0 */
+  --accent:                  #bcc0cc; /* Surface 1 */
+  --accent-foreground:       #4c4f69; /* Text */
+  --destructive:             #d20f39; /* Red */
+  --destructive-foreground:  #eff1f5; /* Base */
+  --border:                  #bcc0cc; /* Surface 1 */
+  --input:                   #bcc0cc; /* Surface 1 */
+  --ring:                    #7287fd; /* Lavender */
+
+  /* Treemap fill ramp: largest items = most prominent accent */
+  --viz-ramp-5: #1e66f5; /* Blue   — ratio > 0.70 */
+  --viz-ramp-4: #8839ef; /* Mauve  — ratio > 0.50 */
+  --viz-ramp-3: #7c7f93; /* Overlay 2 */
+  --viz-ramp-2: #acb0be; /* Surface 2 */
+  --viz-ramp-1: #ccd0da; /* Surface 0 */
+  --viz-stroke: #bcc0cc; /* Surface 1 */
+
+  /* Sunburst level accent cycle (Blue → Sapphire → Teal → Green → Yellow → Peach → Mauve) */
+  --viz-sun-0: #1e66f5;
+  --viz-sun-1: #209fb5;
+  --viz-sun-2: #179299;
+  --viz-sun-3: #40a02b;
+  --viz-sun-4: #df8e1d;
+  --viz-sun-5: #fe640b;
+  --viz-sun-6: #8839ef;
+}
+
+/* ─── Catppuccin Frappé (dark, soft) ───────────────────────────────────── */
+.theme-frappe {
+  --background:              #303446; /* Base */
+  --foreground:              #c6d0f5; /* Text */
+  --card:                    #292c3c; /* Mantle */
+  --card-foreground:         #c6d0f5; /* Text */
+  --popover:                 #292c3c; /* Mantle */
+  --popover-foreground:      #c6d0f5; /* Text */
+  --primary:                 #8caaee; /* Blue */
+  --primary-foreground:      #303446; /* Base */
+  --secondary:               #414559; /* Surface 0 */
+  --secondary-foreground:    #c6d0f5; /* Text */
+  --muted:                   #414559; /* Surface 0 */
+  --muted-foreground:        #a5adce; /* Subtext 0 */
+  --accent:                  #51576d; /* Surface 1 */
+  --accent-foreground:       #c6d0f5; /* Text */
+  --destructive:             #e78284; /* Red */
+  --destructive-foreground:  #303446; /* Base */
+  --border:                  #51576d; /* Surface 1 */
+  --input:                   #51576d; /* Surface 1 */
+  --ring:                    #babbf1; /* Lavender */
+
+  --viz-ramp-5: #8caaee; /* Blue */
+  --viz-ramp-4: #ca9ee6; /* Mauve */
+  --viz-ramp-3: #949cbb; /* Overlay 2 */
+  --viz-ramp-2: #626880; /* Surface 2 */
+  --viz-ramp-1: #414559; /* Surface 0 */
+  --viz-stroke: #51576d; /* Surface 1 */
+
+  --viz-sun-0: #8caaee;
+  --viz-sun-1: #85c1dc;
+  --viz-sun-2: #81c8be;
+  --viz-sun-3: #a6d189;
+  --viz-sun-4: #e5c890;
+  --viz-sun-5: #ef9f76;
+  --viz-sun-6: #ca9ee6;
+}
+
+/* ─── Catppuccin Macchiato (dark, medium) ──────────────────────────────── */
+.theme-macchiato {
+  --background:              #24273a; /* Base */
+  --foreground:              #cad3f5; /* Text */
+  --card:                    #1e2030; /* Mantle */
+  --card-foreground:         #cad3f5; /* Text */
+  --popover:                 #1e2030; /* Mantle */
+  --popover-foreground:      #cad3f5; /* Text */
+  --primary:                 #8aadf4; /* Blue */
+  --primary-foreground:      #24273a; /* Base */
+  --secondary:               #363a4f; /* Surface 0 */
+  --secondary-foreground:    #cad3f5; /* Text */
+  --muted:                   #363a4f; /* Surface 0 */
+  --muted-foreground:        #a5adcb; /* Subtext 0 */
+  --accent:                  #494d64; /* Surface 1 */
+  --accent-foreground:       #cad3f5; /* Text */
+  --destructive:             #ed8796; /* Red */
+  --destructive-foreground:  #24273a; /* Base */
+  --border:                  #494d64; /* Surface 1 */
+  --input:                   #494d64; /* Surface 1 */
+  --ring:                    #b7bdf8; /* Lavender */
+
+  --viz-ramp-5: #8aadf4; /* Blue */
+  --viz-ramp-4: #c6a0f6; /* Mauve */
+  --viz-ramp-3: #939ab7; /* Overlay 2 */
+  --viz-ramp-2: #5b6078; /* Surface 2 */
+  --viz-ramp-1: #363a4f; /* Surface 0 */
+  --viz-stroke: #494d64; /* Surface 1 */
+
+  --viz-sun-0: #8aadf4;
+  --viz-sun-1: #7dc4e4;
+  --viz-sun-2: #8bd5ca;
+  --viz-sun-3: #a6da95;
+  --viz-sun-4: #eed49f;
+  --viz-sun-5: #f5a97f;
+  --viz-sun-6: #c6a0f6;
+}
+
+/* ─── Catppuccin Mocha (dark, deep) ────────────────────────────────────── */
+.theme-mocha {
+  --background:              #1e1e2e; /* Base */
+  --foreground:              #cdd6f4; /* Text */
+  --card:                    #181825; /* Mantle */
+  --card-foreground:         #cdd6f4; /* Text */
+  --popover:                 #181825; /* Mantle */
+  --popover-foreground:      #cdd6f4; /* Text */
+  --primary:                 #89b4fa; /* Blue */
+  --primary-foreground:      #1e1e2e; /* Base */
+  --secondary:               #313244; /* Surface 0 */
+  --secondary-foreground:    #cdd6f4; /* Text */
+  --muted:                   #313244; /* Surface 0 */
+  --muted-foreground:        #a6adc8; /* Subtext 0 */
+  --accent:                  #45475a; /* Surface 1 */
+  --accent-foreground:       #cdd6f4; /* Text */
+  --destructive:             #f38ba8; /* Red */
+  --destructive-foreground:  #1e1e2e; /* Base */
+  --border:                  #45475a; /* Surface 1 */
+  --input:                   #45475a; /* Surface 1 */
+  --ring:                    #b4befe; /* Lavender */
+
+  --viz-ramp-5: #89b4fa; /* Blue */
+  --viz-ramp-4: #cba6f7; /* Mauve */
+  --viz-ramp-3: #9399b2; /* Overlay 2 */
+  --viz-ramp-2: #585b70; /* Surface 2 */
+  --viz-ramp-1: #313244; /* Surface 0 */
+  --viz-stroke: #45475a; /* Surface 1 */
+
+  --viz-sun-0: #89b4fa;
+  --viz-sun-1: #74c7ec;
+  --viz-sun-2: #94e2d5;
+  --viz-sun-3: #a6e3a1;
+  --viz-sun-4: #f9e2af;
+  --viz-sun-5: #fab387;
+  --viz-sun-6: #cba6f7;
+}
+
+/* ─── System-preference fallback (before JS applies a class) ───────────── */
+/* Resolved by useThemeSettings on mount; these cover the brief pre-mount frame. */
+@media (prefers-color-scheme: dark) {
+  :root:not([class*="theme-"]) {
+    --background:              #1e1e2e;
+    --foreground:              #cdd6f4;
+    --card:                    #181825;
+    --card-foreground:         #cdd6f4;
+    --popover:                 #181825;
+    --popover-foreground:      #cdd6f4;
+    --primary:                 #89b4fa;
+    --primary-foreground:      #1e1e2e;
+    --secondary:               #313244;
+    --secondary-foreground:    #cdd6f4;
+    --muted:                   #313244;
+    --muted-foreground:        #a6adc8;
+    --accent:                  #45475a;
+    --accent-foreground:       #cdd6f4;
+    --destructive:             #f38ba8;
+    --destructive-foreground:  #1e1e2e;
+    --border:                  #45475a;
+    --input:                   #45475a;
+    --ring:                    #b4befe;
+    --viz-ramp-5: #89b4fa;
+    --viz-ramp-4: #cba6f7;
+    --viz-ramp-3: #9399b2;
+    --viz-ramp-2: #585b70;
+    --viz-ramp-1: #313244;
+    --viz-stroke: #45475a;
+    --viz-sun-0: #89b4fa;
+    --viz-sun-1: #74c7ec;
+    --viz-sun-2: #94e2d5;
+    --viz-sun-3: #a6e3a1;
+    --viz-sun-4: #f9e2af;
+    --viz-sun-5: #fab387;
+    --viz-sun-6: #cba6f7;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([class*="theme-"]) {
+    --background:              #eff1f5;
+    --foreground:              #4c4f69;
+    --card:                    #e6e9ef;
+    --card-foreground:         #4c4f69;
+    --popover:                 #e6e9ef;
+    --popover-foreground:      #4c4f69;
+    --primary:                 #1e66f5;
+    --primary-foreground:      #eff1f5;
+    --secondary:               #ccd0da;
+    --secondary-foreground:    #4c4f69;
+    --muted:                   #ccd0da;
+    --muted-foreground:        #6c6f85;
+    --accent:                  #bcc0cc;
+    --accent-foreground:       #4c4f69;
+    --destructive:             #d20f39;
+    --destructive-foreground:  #eff1f5;
+    --border:                  #bcc0cc;
+    --input:                   #bcc0cc;
+    --ring:                    #7287fd;
+    --viz-ramp-5: #1e66f5;
+    --viz-ramp-4: #8839ef;
+    --viz-ramp-3: #7c7f93;
+    --viz-ramp-2: #acb0be;
+    --viz-ramp-1: #ccd0da;
+    --viz-stroke: #bcc0cc;
+    --viz-sun-0: #1e66f5;
+    --viz-sun-1: #209fb5;
+    --viz-sun-2: #179299;
+    --viz-sun-3: #40a02b;
+    --viz-sun-4: #df8e1d;
+    --viz-sun-5: #fe640b;
+    --viz-sun-6: #8839ef;
+  }
+}
+
+* {
+  border-color: var(--border);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
