@@ -27,7 +27,6 @@ interface SunburstNode {
 
 const SunburstChart: React.FC<SunburstChartProps> = ({
   data,
-  onNodeClick,
   onNodeDoubleClick,
   onNodeDeleted,
 }) => {
@@ -252,13 +251,8 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
                   stroke="var(--viz-stroke)"
                   strokeWidth={1}
                   className="cursor-pointer transition-all duration-300 hover:brightness-110"
-                  role="button"
-                  tabIndex={0}
+                  style={{ outline: "none" }}
                   aria-label={`${node.name} - ${formatFileSize(node.size)}`}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    onNodeClick?.(node);
-                  }}
                   onDoubleClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -268,13 +262,8 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
                     handleContextMenu(node);
                   }}
                   onMouseEnter={(e) => handleMouseEnter(sunburstNode, e)}
+                  onMouseMove={(e) => setTooltip((prev) => prev.visible ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
                   onMouseLeave={handleMouseLeave}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      onNodeClick?.(node);
-                    }
-                  }}
                 />
 
                 {shouldShowText && (

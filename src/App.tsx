@@ -1,4 +1,4 @@
-import { BarChart3, HardDriveIcon, KeyboardIcon, Target, XIcon } from "lucide-react";
+import { BarChart3, HardDriveIcon, InfoIcon, KeyboardIcon, Target, XIcon } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,7 @@ import type { FileNode, ScanProgress as Progress, ScanSummary } from "@/types";
 import SunburstChart from "@/components/charts/SunburstChart";
 import TreeMapChart from "@/components/charts/TreeMapChart";
 import ScanProgress from "@/components/ScanProgress";
+import NoticesModal from "@/components/NoticesModal";
 import { AccentPicker } from "@/components/AccentPicker";
 import { ThemePicker } from "@/components/ThemePicker";
 
@@ -30,6 +31,7 @@ function App() {
   const [currentViewNode, setCurrentViewNode] = useState<FileNode | null>(null);
   const [breadcrumbs, setBreadcrumbs] = useState<FileNode[]>([]);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showNotices, setShowNotices] = useState(false);
   const { visualizationType, setVisualizationType } = useVisualizationSettings();
   const { theme, setTheme, accent, setAccent, resolvedFlavor, accentColor } = useThemeSettings();
 
@@ -151,6 +153,11 @@ function App() {
     [currentViewNode, handleScanDirectory],
   );
 
+  const handleGoBack = useCallback(() => {
+    if (breadcrumbs.length <= 1) return;
+    handleBreadcrumbClick(breadcrumbs.length - 2);
+  }, [breadcrumbs.length, handleBreadcrumbClick]);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey) {
@@ -166,10 +173,49 @@ function App() {
             break;
         }
       }
+      if (event.key === "Backspace" && !showShortcuts) {
+        handleGoBack();
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleFolderPicker]);
+  }, [handleFolderPicker, handleGoBack, showShortcuts]);
+
+  // Touch tracking for swipe-back gesture
+  const touchStartX = useRef(0);
+  const touchStartY = useRef(0);
+
+  const handleTouchStart = useCallback((e: TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+  }, []);
+
+  const handleTouchEnd = useCallback(
+    (e: TouchEvent) => {
+      const deltaX = e.changedTouches[0].clientX - touchStartX.current;
+      const deltaY = e.changedTouches[0].clientY - touchStartY.current;
+      const horizontalDistance = Math.abs(deltaX);
+      const verticalDistance = Math.abs(deltaY);
+      // Swipe back: rightward motion > 50px, more horizontal than vertical
+      if (
+        deltaX > 50 &&
+        horizontalDistance > verticalDistance &&
+        verticalDistance < 50
+      ) {
+        handleGoBack();
+      }
+    },
+    [handleGoBack],
+  );
+
+  useEffect(() => {
+    window.addEventListener("touchstart", handleTouchStart, false);
+    window.addEventListener("touchend", handleTouchEnd, false);
+    return () => {
+      window.removeEventListener("touchstart", handleTouchStart, false);
+      window.removeEventListener("touchend", handleTouchEnd, false);
+    };
+  }, [handleTouchStart, handleTouchEnd]);
 
   return (
     <div className="h-screen bg-background overflow-hidden flex flex-col">
@@ -325,17 +371,27 @@ function App() {
             <button
               type="button"
               onClick={() => setShowShortcuts((s) => !s)}
-              className="flex items-center space-x-1 hover:text-foreground transition-colors"
+              className="flex items-center gap-1.5 border border-border/60 rounded px-2 py-0.5 hover:bg-muted/60 hover:text-foreground hover:border-border transition-colors"
               title="Keyboard shortcuts (Cmd+?)"
             >
               <KeyboardIcon className="w-3 h-3" />
               <span>Shortcuts</span>
             </button>
 
-            <span className="text-muted-foreground">vizdisk (MIT)</span>
+            <button
+              type="button"
+              onClick={() => setShowNotices(true)}
+              className="flex items-center gap-1.5 border border-border/60 rounded px-2 py-0.5 hover:bg-muted/60 hover:text-foreground hover:border-border transition-colors"
+              title="Open-source notices"
+            >
+              <InfoIcon className="w-3 h-3" />
+              <span>Notices</span>
+            </button>
           </div>
         </div>
       </footer>
+
+      {showNotices && <NoticesModal onClose={() => setShowNotices(false)} />}
 
       {showShortcuts && (
         <div
@@ -369,6 +425,14 @@ function App() {
               <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Show shortcuts</span>
                 <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘?</kbd>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground">Go back</span>
+                <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">Backspace</kbd>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground">Go back (mobile)</span>
+                <span className="text-xs text-muted-foreground">Swipe right</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Double-click folder</span>

@@ -28,6 +28,10 @@ export function useTreeMapInteraction() {
     setTooltip({ visible: true, x: e.clientX, y: e.clientY, data });
   }, []);
 
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    setTooltip((prev) => prev.visible ? { ...prev, x: e.clientX, y: e.clientY } : prev);
+  }, []);
+
   const handleMouseLeave = useCallback(() => {
     setTooltip((prev) => ({ ...prev, visible: false }));
   }, []);
@@ -40,6 +44,7 @@ export function useTreeMapInteraction() {
     tooltip,
     contextMenuNode,
     handleMouseEnter,
+    handleMouseMove,
     handleMouseLeave,
     handleContextMenu,
   };

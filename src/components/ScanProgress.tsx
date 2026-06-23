@@ -1,4 +1,5 @@
 import type React from "react";
+import { useEffect, useRef, useState } from "react";
 import { HardDriveIcon } from "lucide-react";
 import type { ScanProgress as Progress } from "@/types";
 import { formatFileSize, formatNumber } from "@/utils/formatters";
@@ -17,6 +18,13 @@ const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
 
 const ScanProgress: React.FC<ScanProgressProps> = ({ progress, rootPath }) => {
   const pct = Math.max(0, Math.min(100, progress?.percent ?? 0));
+  const startedAt = useRef(Date.now());
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt.current) / 1000)), 500);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <div className="w-full max-w-xl space-y-7">
@@ -35,7 +43,9 @@ const ScanProgress: React.FC<ScanProgressProps> = ({ progress, rootPath }) => {
       <div className="space-y-2">
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Progress</span>
-          <span className="font-medium tabular-nums">{pct.toFixed(0)}%</span>
+          <span className="font-medium tabular-nums text-muted-foreground">
+            {elapsed}s · {pct.toFixed(0)}%
+          </span>
         </div>
         <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
           <div

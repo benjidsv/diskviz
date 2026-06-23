@@ -27,7 +27,7 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
   onNodeDeleted,
 }) => {
   const { data: treeMapData, maxSize, minSize, totalSize } = useTreeMapData(data);
-  const { tooltip, contextMenuNode, handleMouseEnter, handleMouseLeave, handleContextMenu } =
+  const { tooltip, contextMenuNode, handleMouseEnter, handleMouseMove, handleMouseLeave, handleContextMenu } =
     useTreeMapInteraction();
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -143,6 +143,7 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenuEvent}
         onMouseEnter={handleMouseEnterEvent}
+        onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
         onKeyDown={handleKeyDown}
       >
