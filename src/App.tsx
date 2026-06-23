@@ -1,5 +1,6 @@
 import { BarChart3, HardDriveIcon, InfoIcon, KeyboardIcon, Target, XIcon } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -187,6 +188,10 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Don't intercept shortcuts when the user is typing in an input/textarea
+      const tag = (event.target as HTMLElement)?.tagName;
+      const isTyping = tag === "INPUT" || tag === "TEXTAREA";
+
       if (event.metaKey || event.ctrlKey) {
         switch (event.key) {
           case "o":
@@ -198,15 +203,53 @@ function App() {
             event.preventDefault();
             setShowShortcuts((s) => !s);
             break;
+          case "z":
+            if (!isTyping && !showShortcuts) {
+              event.preventDefault();
+              void handleGoBack();
+            }
+            break;
+          case "Z": // Shift+Z
+            if (!isTyping && !showShortcuts) {
+              event.preventDefault();
+              void handleGoForward();
+            }
+            break;
         }
       }
-      if (event.key === "Backspace" && !showShortcuts) {
+      if (event.key === "Backspace" && !showShortcuts && !isTyping) {
         void handleGoBack();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleFolderPicker, handleGoBack, showShortcuts]);
+  }, [handleFolderPicker, handleGoBack, handleGoForward, showShortcuts]);
+
+  // ── Native menu event listeners ────────────────────────────────────────────
+  // Each event mirrors the corresponding in-app UI control.
+  useEffect(() => {
+    const unlisteners = [
+      listen("menu-open-folder", () => { void handleFolderPicker(); }),
+      listen("menu-show-shortcuts", () => { setShowShortcuts(true); }),
+      listen("menu-show-notices", () => { setShowNotices(true); }),
+      listen<string>("menu-set-theme", (e) => {
+        const v = e.payload as ThemeSetting;
+        setTheme(v);
+      }),
+      listen<string>("menu-set-accent", (e) => {
+        const v = e.payload as AccentColor;
+        setAccent(v);
+      }),
+      listen<string>("menu-set-visualization", (e) => {
+        const v = e.payload;
+        if (v === "treemap" || v === "sunburst") setVisualizationType(v);
+      }),
+    ];
+    return () => {
+      unlisteners.forEach((p) => p.then((fn) => fn()).catch(() => {}));
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Trackpad swipe gesture using wheel events
   const swipeStateRef = useRef({ accumulatedBack: 0, accumulatedForward: 0, cooldownUntil: 0 });
@@ -479,15 +522,19 @@ function App() {
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Go back</span>
-                <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">Backspace</kbd>
+                <div className="flex items-center gap-1">
+                  <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘Z</kbd>
+                  <span className="text-muted-foreground text-xs">/</span>
+                  <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌫</kbd>
+                </div>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Go back (swipe)</span>
-                <span className="text-xs text-muted-foreground">Swipe right</span>
+                <span className="text-muted-foreground">Go forward</span>
+                <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘⇧Z</kbd>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Go forward (swipe)</span>
-                <span className="text-xs text-muted-foreground">Swipe left</span>
+                <span className="text-muted-foreground">Go back / forward (swipe)</span>
+                <span className="text-xs text-muted-foreground">Swipe right / left</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Double-click folder</span>
