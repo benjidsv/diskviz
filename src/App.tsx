@@ -217,9 +217,7 @@ function App() {
             break;
         }
       }
-      if (event.key === "Backspace" && !showShortcuts && !isTyping) {
-        void handleGoBack();
-      }
+
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -517,32 +515,28 @@ function App() {
                 <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘O</kbd>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Show shortcuts</span>
-                <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘?</kbd>
+                <span className="text-muted-foreground">Drill into folder</span>
+                <span className="text-xs text-muted-foreground">Double-click</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Go back</span>
+                <span className="text-muted-foreground">Swipe to navigate</span>
+                <span className="text-xs text-muted-foreground">← →</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground">Navigate to parent</span>
+                <span className="text-xs text-muted-foreground">Click breadcrumb</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground">Navigate back / forward</span>
                 <div className="flex items-center gap-1">
                   <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘Z</kbd>
                   <span className="text-muted-foreground text-xs">/</span>
-                  <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌫</kbd>
+                  <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘⇧Z</kbd>
                 </div>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Go forward</span>
-                <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘⇧Z</kbd>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Go back / forward (swipe)</span>
-                <span className="text-xs text-muted-foreground">Swipe right / left</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Double-click folder</span>
-                <span className="text-xs text-muted-foreground">Drill down</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Breadcrumb navigation</span>
-                <span className="text-xs text-muted-foreground">Go back</span>
+                <span className="text-muted-foreground">Show shortcuts</span>
+                <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘?</kbd>
               </div>
             </div>
           </div>
