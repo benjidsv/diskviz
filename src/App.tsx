@@ -32,6 +32,7 @@ function App() {
   const [breadcrumbs, setBreadcrumbs] = useState<FileNode[]>([]);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showNotices, setShowNotices] = useState(false);
+  const [forwardStack, setForwardStack] = useState<FileNode[]>([]);
   const { visualizationType, setVisualizationType } = useVisualizationSettings();
   const { theme, setTheme, accent, setAccent, resolvedFlavor, accentColor } = useThemeSettings();
 
@@ -91,6 +92,7 @@ function App() {
       setSummary(null);
       setCurrentViewNode(null);
       setBreadcrumbs([]);
+      setForwardStack([]);
       setProgress(null);
       setIsScanning(true);
       scannedPath.current = pathToScan;
@@ -115,6 +117,7 @@ function App() {
     try {
       const fresh = await getSubtree(node.id);
       if (!fresh.children || fresh.children.length === 0) return;
+      setForwardStack([]);
       setCurrentViewNode(fresh);
       setBreadcrumbs((prev) => [...prev, fresh]);
     } catch (error) {
@@ -128,6 +131,7 @@ function App() {
       if (!target) return;
       try {
         const fresh = await getSubtree(target.id);
+        setForwardStack([]);
         setBreadcrumbs((prev) => prev.slice(0, index + 1));
         setCurrentViewNode(fresh);
       } catch (error) {
@@ -153,10 +157,33 @@ function App() {
     [currentViewNode, handleScanDirectory],
   );
 
-  const handleGoBack = useCallback(() => {
+  const handleGoBack = useCallback(async () => {
     if (breadcrumbs.length <= 1) return;
-    handleBreadcrumbClick(breadcrumbs.length - 2);
-  }, [breadcrumbs.length, handleBreadcrumbClick]);
+    const currentTip = breadcrumbs[breadcrumbs.length - 1];
+    const target = breadcrumbs[breadcrumbs.length - 2];
+    try {
+      const fresh = await getSubtree(target.id);
+      setForwardStack((prev) => [currentTip, ...prev]);
+      setBreadcrumbs((prev) => prev.slice(0, -1));
+      setCurrentViewNode(fresh);
+    } catch (error) {
+      console.error("Failed to go back:", error);
+    }
+  }, [breadcrumbs]);
+
+  const handleGoForward = useCallback(async () => {
+    if (forwardStack.length === 0) return;
+    const [next, ...rest] = forwardStack;
+    try {
+      const fresh = await getSubtree(next.id);
+      setBreadcrumbs((prev) => [...prev, fresh]);
+      setCurrentViewNode(fresh);
+      setForwardStack(rest);
+    } catch (error) {
+      console.error("Failed to go forward:", error);
+      setForwardStack([]);
+    }
+  }, [forwardStack]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -174,48 +201,72 @@ function App() {
         }
       }
       if (event.key === "Backspace" && !showShortcuts) {
-        handleGoBack();
+        void handleGoBack();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleFolderPicker, handleGoBack, showShortcuts]);
 
-  // Touch tracking for swipe-back gesture
-  const touchStartX = useRef(0);
-  const touchStartY = useRef(0);
+  // Trackpad swipe gesture using wheel events
+  const swipeStateRef = useRef({ accumulatedBack: 0, accumulatedForward: 0, cooldownUntil: 0 });
+  const swipeTimerRef = useRef<NodeJS.Timeout>();
 
-  const handleTouchStart = useCallback((e: TouchEvent) => {
-    touchStartX.current = e.touches[0].clientX;
-    touchStartY.current = e.touches[0].clientY;
-  }, []);
+  const handleWheel = useCallback(
+    (e: WheelEvent) => {
+      // Block all native scroll/pan — this is a canvas-like app with no scrollable regions
+      e.preventDefault();
 
-  const handleTouchEnd = useCallback(
-    (e: TouchEvent) => {
-      const deltaX = e.changedTouches[0].clientX - touchStartX.current;
-      const deltaY = e.changedTouches[0].clientY - touchStartY.current;
-      const horizontalDistance = Math.abs(deltaX);
-      const verticalDistance = Math.abs(deltaY);
-      // Swipe back: rightward motion > 50px, more horizontal than vertical
-      if (
-        deltaX > 50 &&
-        horizontalDistance > verticalDistance &&
-        verticalDistance < 50
-      ) {
-        handleGoBack();
+      const now = Date.now();
+      const state = swipeStateRef.current;
+
+      if (now < state.cooldownUntil) return;
+
+      // Must be primarily horizontal; reset both accumulators on vertical/diagonal
+      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) {
+        state.accumulatedBack = 0;
+        state.accumulatedForward = 0;
+        if (swipeTimerRef.current) clearTimeout(swipeTimerRef.current);
+        return;
+      }
+
+      if (swipeTimerRef.current) clearTimeout(swipeTimerRef.current);
+      swipeTimerRef.current = setTimeout(() => {
+        state.accumulatedBack = 0;
+        state.accumulatedForward = 0;
+      }, 300);
+
+      if (e.deltaX < 0) {
+        // Right swipe (fingers moving right, negative deltaX) → go back
+        state.accumulatedBack += Math.abs(e.deltaX);
+        state.accumulatedForward = 0;
+        if (state.accumulatedBack > 150) {
+          handleGoBack();
+          state.accumulatedBack = 0;
+          state.cooldownUntil = now + 800;
+        }
+      } else {
+        // Left swipe (fingers moving left, positive deltaX) → go forward
+        state.accumulatedForward += e.deltaX;
+        state.accumulatedBack = 0;
+        if (state.accumulatedForward > 150) {
+          handleGoForward();
+          state.accumulatedForward = 0;
+          state.cooldownUntil = now + 800;
+        }
       }
     },
-    [handleGoBack],
+    [handleGoBack, handleGoForward],
   );
 
   useEffect(() => {
-    window.addEventListener("touchstart", handleTouchStart, false);
-    window.addEventListener("touchend", handleTouchEnd, false);
+    // Must be non-passive to allow preventDefault()
+    window.addEventListener("wheel", handleWheel as EventListener, { passive: false });
     return () => {
-      window.removeEventListener("touchstart", handleTouchStart, false);
-      window.removeEventListener("touchend", handleTouchEnd, false);
+      window.removeEventListener("wheel", handleWheel as EventListener);
+      if (swipeTimerRef.current) clearTimeout(swipeTimerRef.current);
     };
-  }, [handleTouchStart, handleTouchEnd]);
+  }, [handleWheel]);
 
   return (
     <div className="h-screen bg-background overflow-hidden flex flex-col">
@@ -254,7 +305,7 @@ function App() {
 
         {summary && currentViewNode && (
           <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-            {breadcrumbs.length > 1 && (
+            {breadcrumbs.length >= 1 && (
               <div className="flex items-center space-x-2 text-sm text-muted-foreground mb-2 overflow-x-auto flex-shrink-0">
                 {breadcrumbs.map((crumb, index) => (
                   <React.Fragment key={crumb.id}>
@@ -431,8 +482,12 @@ function App() {
                 <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">Backspace</kbd>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Go back (mobile)</span>
+                <span className="text-muted-foreground">Go back (swipe)</span>
                 <span className="text-xs text-muted-foreground">Swipe right</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground">Go forward (swipe)</span>
+                <span className="text-xs text-muted-foreground">Swipe left</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Double-click folder</span>
