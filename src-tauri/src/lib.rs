@@ -13,6 +13,7 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::scan_directory,
+            commands::cancel_scan,
             commands::get_subtree,
             commands::get_home_directory,
             commands::get_common_directories,

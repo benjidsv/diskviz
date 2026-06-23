@@ -3,7 +3,8 @@
 //! payloads stay tiny regardless of how many millions of files were scanned.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -13,6 +14,8 @@ use crate::scanner::{self, Progress, ScanTree};
 #[derive(Default)]
 pub struct AppState {
     pub tree: Mutex<Option<ScanTree>>,
+    /// Set by `cancel_scan` and polled inside the active scan to abort early.
+    pub cancel: Arc<AtomicBool>,
 }
 
 /// Mirrors vizdisk's `FileNode` shape so the ported React components work
@@ -29,6 +32,11 @@ pub struct FileNodeDto {
     pub file_count: u64,
     pub dir_count: u64,
     pub children: Vec<FileNodeDto>,
+    /// Immediate children that were truncated away (beyond `max_children`).
+    pub hidden_children: u64,
+    /// Summed size of those truncated children — lets the UI show an honest
+    /// "Other" bucket without re-deriving it from the node's own total.
+    pub hidden_size: u64,
     pub last_modified: i64,
     pub is_hidden: bool,
     pub permissions: String,
@@ -115,14 +123,27 @@ pub async fn scan_directory(
     let root = PathBuf::from(&path);
     let app_for_progress = app.clone();
 
-    let tree = tauri::async_runtime::spawn_blocking(move || {
-        scanner::scan(root, move |p| {
+    // Fresh run: clear any leftover cancellation request from a prior scan.
+    let cancel = state.cancel.clone();
+    cancel.store(false, Ordering::Relaxed);
+
+    let scan_result = tauri::async_runtime::spawn_blocking(move || {
+        scanner::scan(root, cancel, move |p| {
             let _ = app_for_progress.emit("scan-progress", ScanProgressDto::running(&p));
         })
     })
     .await
-    .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
+
+    let tree = match scan_result {
+        Ok(tree) => tree,
+        // Distinct, non-error sentinel so the frontend can silently restore the
+        // prior view instead of surfacing a scan-failure card.
+        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+            return Err("cancelled".to_string())
+        }
+        Err(e) => return Err(e.to_string()),
+    };
 
     let summary = ScanSummary {
         root_id: tree.root.to_string(),
@@ -230,6 +251,14 @@ pub fn delete_node(
         total_directories: total_dirs,
         scan_duration_ms: tree.scan_duration_ms,
     })
+}
+
+/// Request cancellation of the in-flight scan. The running `scanner::scan`
+/// polls this flag and aborts with `ErrorKind::Interrupted`, which
+/// `scan_directory` reports back as the "cancelled" sentinel.
+#[tauri::command]
+pub fn cancel_scan(state: State<'_, AppState>) {
+    state.cancel.store(true, Ordering::Relaxed);
 }
 
 #[tauri::command]

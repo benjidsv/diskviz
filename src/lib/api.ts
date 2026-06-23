@@ -7,6 +7,9 @@ import type { FileNode, ScanProgress, ScanSummary } from "@/types";
 export const scanDirectory = (path: string) =>
   invoke<ScanSummary>("scan_directory", { path });
 
+/** Request cancellation of the in-flight scan. Rejects the scanDirectory call. */
+export const cancelScan = () => invoke<void>("cancel_scan");
+
 /** Pull a bounded slice of the scanned tree (kept in Rust) for rendering. */
 export const getSubtree = (nodeId: string, maxDepth = 3, maxChildren = 20) =>
   invoke<FileNode>("get_subtree", { nodeId, maxDepth, maxChildren });
