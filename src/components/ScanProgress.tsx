@@ -11,7 +11,7 @@ interface ScanProgressProps {
 
 const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <div className="rounded-lg border border-border/60 p-3">
-    <div className="text-base font-semibold tabular-nums">{value}</div>
+    <div className="text-base font-semibold font-mono tabular-nums">{value}</div>
     <div className="text-xs text-muted-foreground">{label}</div>
   </div>
 );
@@ -43,7 +43,7 @@ const ScanProgress: React.FC<ScanProgressProps> = ({ progress, rootPath }) => {
       <div className="space-y-2">
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Progress</span>
-          <span className="font-medium tabular-nums text-muted-foreground">
+          <span className="font-mono tabular-nums text-muted-foreground">
             {elapsed}s · {pct.toFixed(0)}%
           </span>
         </div>

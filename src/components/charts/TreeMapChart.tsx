@@ -166,7 +166,7 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
               fontWeight="600"
               style={{
                 textShadow: `0 1px 2px rgba(0,0,0,0.3)`,
-                fontFamily: "system-ui, -apple-system, sans-serif",
+                fontFamily: "var(--font-sans)",
               }}
             >
               {name.length > Math.floor(adjustedWidth / (fontSize * 0.6))
@@ -184,7 +184,7 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
                 fontWeight="500"
                 style={{
                   textShadow: `0 1px 2px rgba(0,0,0,0.3)`,
-                  fontFamily: "system-ui, -apple-system, sans-serif",
+                  fontFamily: "var(--font-mono)",
                 }}
               >
                 {formatFileSize(size)}

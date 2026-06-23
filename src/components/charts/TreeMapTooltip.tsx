@@ -37,7 +37,7 @@ export const TreeMapTooltip: React.FC<TreeMapTooltipProps> = ({
           )}
           <span className="font-medium text-sm truncate">{data.name}</span>
         </div>
-        <div className="mt-1 text-xs text-muted-foreground space-y-0.5">
+        <div className="mt-1 text-xs text-muted-foreground space-y-0.5 font-mono tabular-nums">
           <div>
             {formatFileSize(data.size)} · {formatPercentage(data.size, parentSize)} of parent
           </div>

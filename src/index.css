@@ -20,6 +20,9 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+
+  --font-sans: "Geist Variable", system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
 }
 
 /* ─── Catppuccin Latte (light) ─────────────────────────────────────────── */
@@ -263,6 +266,11 @@ g[role="button"]:focus-visible rect {
   stroke-width: 2 !important;
 }
 
+/* SVG treemap tile hover — subtle brightness lift to match sunburst */
+g[role="button"]:hover rect {
+  filter: brightness(1.1);
+}
+
 html,
 body,
 #root {
@@ -273,6 +281,6 @@ body {
   margin: 0;
   background: var(--background);
   color: var(--foreground);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }

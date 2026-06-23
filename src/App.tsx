@@ -1,4 +1,4 @@
-import { BarChart3, HardDriveIcon, InfoIcon, KeyboardIcon, Target, XIcon } from "lucide-react";
+import { BarChart3, HardDriveIcon, InfoIcon, KeyboardIcon, Target } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import SunburstChart from "@/components/charts/SunburstChart";
 import TreeMapChart from "@/components/charts/TreeMapChart";
 import ScanProgress from "@/components/ScanProgress";
 import NoticesModal from "@/components/NoticesModal";
+import Modal from "@/components/ui/modal";
 import { AccentPicker } from "@/components/AccentPicker";
 import { ThemePicker } from "@/components/ThemePicker";
 import { showBreadcrumbContextMenu } from "@/hooks/useNativeContextMenu";
@@ -39,7 +40,6 @@ function App() {
   const { theme, setTheme, accent, setAccent, resolvedFlavor, accentColor } = useThemeSettings();
 
   const scannedPath = useRef<string>("");
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   // Full 5-stop ramp: 4 static base stops + current accent as ramp-5
   const rampStops = useMemo(
@@ -59,23 +59,6 @@ function App() {
       unlisten.then((fn) => fn()).catch(() => {});
     };
   }, []);
-
-  // Autofocus the close button when the shortcuts modal opens
-  useEffect(() => {
-    if (showShortcuts) {
-      closeButtonRef.current?.focus();
-    }
-  }, [showShortcuts]);
-
-  // Global Escape handler for the shortcuts modal
-  useEffect(() => {
-    if (!showShortcuts) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setShowShortcuts(false);
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [showShortcuts]);
 
   // Suppress the default WebView context menu everywhere in production
   // so native right-clicks are handled exclusively by our Tauri menus.
@@ -262,7 +245,7 @@ function App() {
 
   // Trackpad swipe gesture using wheel events
   const swipeStateRef = useRef({ accumulatedBack: 0, accumulatedForward: 0, cooldownUntil: 0 });
-  const swipeTimerRef = useRef<NodeJS.Timeout>();
+  const swipeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleWheel = useCallback(
     (e: WheelEvent) => {
@@ -358,7 +341,7 @@ function App() {
         {summary && currentViewNode && (
             <div className="flex-1 min-h-0 border border-border/60 rounded-lg px-5 py-4 flex flex-col">
               {breadcrumbs.length >= 1 && (
-                <div className="flex items-center text-xs text-muted-foreground pb-2 border-b border-border/40 mb-3 overflow-x-auto flex-shrink-0" style={{ userSelect: "none" }}>
+                <div className="flex items-center text-xs text-muted-foreground font-mono pb-2 border-b border-border/40 mb-3 overflow-x-auto flex-shrink-0" style={{ userSelect: "none" }}>
                   {breadcrumbs.map((crumb, index) => (
                     <React.Fragment key={crumb.id}>
                       <button
@@ -409,7 +392,7 @@ function App() {
               <HardDriveIcon className="h-12 w-12 text-muted-foreground" />
             </div>
             <div className="text-center space-y-2">
-              <h3 className="text-xl font-medium text-foreground">Choose a directory</h3>
+              <h3 className="text-xl font-semibold text-foreground">Choose a directory</h3>
               <p className="text-muted-foreground">
                 Select a folder above to visualize what's using your space
               </p>
@@ -422,17 +405,17 @@ function App() {
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           {/* Left: brand + live stats */}
           <div className="flex items-center space-x-3">
-            <span className="font-medium text-foreground">diskviz</span>
+            <span className="font-semibold text-foreground">diskviz</span>
             {summary && currentViewNode && (
               <>
                 <span className="text-border">·</span>
-                <span className="tabular-nums">{formatFileSize(currentViewNode.size)}</span>
+                <span className="font-mono tabular-nums">{formatFileSize(currentViewNode.size)}</span>
                 <span className="text-border">·</span>
-                <span className="tabular-nums">{currentViewNode.fileCount.toLocaleString()} files</span>
+                <span className="font-mono tabular-nums">{currentViewNode.fileCount.toLocaleString()} files</span>
                 <span className="text-border">·</span>
-                <span className="tabular-nums">{currentViewNode.dirCount.toLocaleString()} dirs</span>
+                <span className="font-mono tabular-nums">{currentViewNode.dirCount.toLocaleString()} dirs</span>
                 <span className="text-border">·</span>
-                <span className="tabular-nums">{formatDuration(summary.scanDurationMs)}</span>
+                <span className="font-mono tabular-nums">{formatDuration(summary.scanDurationMs)}</span>
               </>
             )}
           </div>
@@ -503,61 +486,43 @@ function App() {
       {showNotices && <NoticesModal onClose={() => setShowNotices(false)} />}
 
       {showShortcuts && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10000]"
-          onClick={() => setShowShortcuts(false)}
+        <Modal
+          titleId="shortcuts-title"
+          title="Keyboard Shortcuts"
+          closeLabel="Close shortcuts"
+          onClose={() => setShowShortcuts(false)}
         >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="shortcuts-title"
-            className="bg-background border border-border rounded-lg shadow-xl p-6 max-w-md w-full mx-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h3 id="shortcuts-title" className="text-lg font-semibold">Keyboard Shortcuts</h3>
-              <button
-                ref={closeButtonRef}
-                type="button"
-                aria-label="Close shortcuts"
-                onClick={() => setShowShortcuts(false)}
-                className="text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded"
-              >
-                <XIcon className="w-5 h-5" />
-              </button>
+          <div className="space-y-3 text-sm">
+            <div className="flex justify-between items-center">
+              <span className="text-muted-foreground">Open folder</span>
+              <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘O</kbd>
             </div>
-            <div className="space-y-3 text-sm">
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Open folder</span>
-                <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘O</kbd>
+            <div className="flex justify-between items-center">
+              <span className="text-muted-foreground">Drill into folder</span>
+              <span className="text-xs text-muted-foreground">Double-click</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-muted-foreground">Swipe to navigate</span>
+              <span className="text-xs text-muted-foreground">← →</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-muted-foreground">Navigate to parent</span>
+              <span className="text-xs text-muted-foreground">Click breadcrumb</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-muted-foreground">Navigate back / forward</span>
+              <div className="flex items-center gap-1">
+                <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘Z</kbd>
+                <span className="text-muted-foreground text-xs">/</span>
+                <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘⇧Z</kbd>
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Drill into folder</span>
-                <span className="text-xs text-muted-foreground">Double-click</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Swipe to navigate</span>
-                <span className="text-xs text-muted-foreground">← →</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Navigate to parent</span>
-                <span className="text-xs text-muted-foreground">Click breadcrumb</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Navigate back / forward</span>
-                <div className="flex items-center gap-1">
-                  <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘Z</kbd>
-                  <span className="text-muted-foreground text-xs">/</span>
-                  <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘⇧Z</kbd>
-                </div>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Show shortcuts</span>
-                <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘?</kbd>
-              </div>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-muted-foreground">Show shortcuts</span>
+              <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘?</kbd>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

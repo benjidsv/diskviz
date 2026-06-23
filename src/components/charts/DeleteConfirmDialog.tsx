@@ -46,7 +46,7 @@ export const DeleteConfirmDialog: React.FC<DeleteConfirmDialogProps> = ({
         <div className="rounded-md bg-muted px-3 py-2 font-mono text-xs break-all">
           {node.path}
         </div>
-        <div className="text-sm text-muted-foreground">Size: {formatFileSize(node.size)}</div>
+        <div className="text-sm text-muted-foreground font-mono tabular-nums">Size: {formatFileSize(node.size)}</div>
         {isDir && (
           <div className="text-sm text-destructive">
             This includes the directory and all of its contents.

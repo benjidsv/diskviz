@@ -10,7 +10,6 @@ import { showNodeContextMenu } from "@/hooks/useNativeContextMenu";
 
 interface SunburstChartProps {
   data: FileNode;
-  onNodeClick?: (node: FileNode) => void;
   onNodeDoubleClick?: (node: FileNode) => void;
   onNodeDeleted?: (node: FileNode) => void;
 }
@@ -236,7 +235,6 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
                   stroke="var(--viz-stroke)"
                   strokeWidth={1}
                   className="cursor-pointer transition-all duration-300 hover:brightness-110"
-                  style={{ outline: "none" }}
                   aria-label={`${node.name} - ${formatFileSize(node.size)}`}
                   onDoubleClick={(e) => {
                     e.preventDefault();
@@ -264,7 +262,7 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
                     className="pointer-events-none select-none"
                     style={{
                       textShadow: "0 1px 2px rgba(0,0,0,0.3)",
-                      fontFamily: "system-ui, -apple-system, sans-serif",
+                      fontFamily: "var(--font-sans)",
                     }}
                     transform={`rotate(${midAngle > 90 && midAngle < 270 ? midAngle + 180 : midAngle}, ${textX}, ${textY})`}
                   >
@@ -292,7 +290,7 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
             fontSize={14}
             fontWeight="600"
             className="pointer-events-none select-none"
-            style={{ fontFamily: "system-ui, -apple-system, sans-serif" }}
+            style={{ fontFamily: "var(--font-sans)" }}
           >
             {data.name}
           </text>
@@ -305,7 +303,7 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
             fontSize={10}
             fontWeight="500"
             className="pointer-events-none select-none"
-            style={{ fontFamily: "system-ui, -apple-system, sans-serif" }}
+            style={{ fontFamily: "var(--font-mono)" }}
           >
             {formatFileSize(data.size)}
           </text>
