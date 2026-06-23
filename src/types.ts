@@ -10,6 +10,10 @@ export interface FileNode {
   dirCount: number;
   /** Only filled up to the depth requested from `get_subtree`. */
   children?: FileNode[];
+  /** Immediate children truncated from `children` (beyond max_children). */
+  hiddenChildren?: number;
+  /** Summed size of those truncated children, for the "Other" bucket. */
+  hiddenSize?: number;
   lastModified?: number;
   isHidden?: boolean;
   permissions?: string;

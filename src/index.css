@@ -296,6 +296,12 @@ g[role="button"]:hover rect {
   filter: brightness(1.1);
 }
 
+/* SVG sunburst arc focus ring — outline isn't supported on SVG in WebKit */
+path[role="button"]:focus-visible {
+  stroke: var(--ring) !important;
+  stroke-width: 2.5 !important;
+}
+
 html,
 body,
 #root {

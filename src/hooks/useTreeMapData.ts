@@ -7,12 +7,19 @@ export interface TreeMapData {
   originalNode: FileNode;
 }
 
+/** Sentinel id for the synthetic "Other" tile (not a real, navigable node). */
+export const OTHER_NODE_ID = "__other__";
+
+/** True for the aggregated remainder tile — guard drill/delete/context menu. */
+export const isOtherNode = (node: FileNode | null | undefined): boolean =>
+  node?.id === OTHER_NODE_ID;
+
 export const useTreeMapData = (node: FileNode | null, maxItems = 20) => {
   const data = useMemo<TreeMapData[]>(() => {
     if (!node || !node.children || node.children.length === 0) {
       return [];
     }
-    return node.children
+    const shown: TreeMapData[] = node.children
       .filter((child) => child.size > 0)
       .sort((a, b) => b.size - a.size)
       .slice(0, maxItems)
@@ -21,6 +28,25 @@ export const useTreeMapData = (node: FileNode | null, maxItems = 20) => {
         size: child.size,
         originalNode: child,
       }));
+
+    // Honest remainder: the backend tells us how many immediate children it
+    // truncated and their combined size. Surface them as one "Other" tile so
+    // the treemap area still adds up to the directory total.
+    if (node.hiddenChildren && node.hiddenChildren > 0 && (node.hiddenSize ?? 0) > 0) {
+      const count = node.hiddenChildren;
+      const otherNode: FileNode = {
+        id: OTHER_NODE_ID,
+        name: `Other (${count.toLocaleString()} items)`,
+        path: "",
+        type: "directory",
+        size: node.hiddenSize ?? 0,
+        fileCount: 0,
+        dirCount: 0,
+      };
+      shown.push({ name: "Other", size: otherNode.size, originalNode: otherNode });
+    }
+
+    return shown;
   }, [node, maxItems]);
 
   const maxSize = useMemo(() => {

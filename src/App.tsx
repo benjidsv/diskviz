@@ -1,57 +1,56 @@
 import { BarChart3, HardDriveIcon, InfoIcon, KeyboardIcon, Target } from "lucide-react";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Dot } from "@/components/ui/dot";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useVisualizationSettings } from "@/hooks/useVisualizationSettings";
 import { useThemeSettings, VIZ_RAMP_BASE } from "@/hooks/useThemeSettings";
 import type { ThemeSetting, AccentColor } from "@/hooks/useThemeSettings";
-import { formatDuration, formatFileSize } from "@/utils/formatters";
 import {
+  cancelScan,
   deleteNode,
-  getHomeDirectory,
   getSubtree,
   onScanProgress,
   pickDirectory,
   scanDirectory,
+  validatePath,
 } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import type { FileNode, ScanProgress as Progress, ScanSummary } from "@/types";
 import SunburstChart from "@/components/charts/SunburstChart";
 import TreeMapChart from "@/components/charts/TreeMapChart";
+import { ColorScaleLegend } from "@/components/charts/ColorScaleLegend";
+import { DetailReadout } from "@/components/charts/DetailReadout";
 import ScanProgress from "@/components/ScanProgress";
 import NoticesModal from "@/components/NoticesModal";
+import { ErrorState } from "@/components/ErrorState";
+import { TopBar } from "@/components/TopBar";
 import Modal from "@/components/ui/modal";
 import { AccentPicker } from "@/components/AccentPicker";
 import { ThemePicker } from "@/components/ThemePicker";
 import { showBreadcrumbContextMenu } from "@/hooks/useNativeContextMenu";
 
 function App() {
-  const [currentPath, setCurrentPath] = useState<string>("");
   const [summary, setSummary] = useState<ScanSummary | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [currentViewNode, setCurrentViewNode] = useState<FileNode | null>(null);
   const [breadcrumbs, setBreadcrumbs] = useState<FileNode[]>([]);
+  const [forwardStack, setForwardStack] = useState<FileNode[]>([]);
+  const [selectedNode, setSelectedNode] = useState<FileNode | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showNotices, setShowNotices] = useState(false);
-  const [forwardStack, setForwardStack] = useState<FileNode[]>([]);
   const { visualizationType, setVisualizationType } = useVisualizationSettings();
   const { theme, setTheme, accent, setAccent, resolvedFlavor, accentColor } = useThemeSettings();
 
   const scannedPath = useRef<string>("");
 
   // Full 5-stop ramp: 4 static base stops + current accent as ramp-5
-  const rampStops = useMemo(
-    () => [...VIZ_RAMP_BASE[resolvedFlavor], accentColor] as string[],
-    [resolvedFlavor, accentColor],
-  );
-
-  useEffect(() => {
-    getHomeDirectory()
-      .then((home) => setCurrentPath((prev) => prev || home))
-      .catch((e) => console.error("Failed to get home directory:", e));
-  }, []);
+  const rampStops = [...VIZ_RAMP_BASE[resolvedFlavor], accentColor] as string[];
 
   useEffect(() => {
     const unlisten = onScanProgress(setProgress);
@@ -70,42 +69,46 @@ function App() {
     return () => document.removeEventListener("contextmenu", suppress);
   }, []);
 
-  const handleFolderPicker = useCallback(async () => {
+  const handleScanDirectory = useCallback(async (path: string) => {
+    if (!path) return;
+    setError(null);
+    setProgress(null);
+    setIsScanning(true);
+    scannedPath.current = path;
+
     try {
-      const selected = await pickDirectory();
-      if (selected) setCurrentPath(selected);
-    } catch (error) {
-      console.error("Failed to open directory dialog:", error);
+      const result = await scanDirectory(path);
+      const root = await getSubtree(result.rootId);
+      setSummary(result);
+      setCurrentViewNode(root);
+      setBreadcrumbs([root]);
+      setForwardStack([]);
+      setSelectedNode(null);
+    } catch (err) {
+      // The backend reports a user cancellation as the "cancelled" sentinel —
+      // keep the prior view intact rather than surfacing an error.
+      const msg = String(err);
+      if (!msg.toLowerCase().includes("cancelled")) {
+        setError(msg);
+      }
+    } finally {
+      setIsScanning(false);
     }
   }, []);
 
-  const handleScanDirectory = useCallback(
-    async (path?: string) => {
-      const pathToScan = path || currentPath;
-      if (!pathToScan) return;
+  // Pick a folder and analyze it in one step (no separate "Analyze" action).
+  const handleFolderPicker = useCallback(async () => {
+    try {
+      const selected = await pickDirectory();
+      if (selected) void handleScanDirectory(selected);
+    } catch (e) {
+      console.error("Failed to open directory dialog:", e);
+    }
+  }, [handleScanDirectory]);
 
-      setSummary(null);
-      setCurrentViewNode(null);
-      setBreadcrumbs([]);
-      setForwardStack([]);
-      setProgress(null);
-      setIsScanning(true);
-      scannedPath.current = pathToScan;
-
-      try {
-        const result = await scanDirectory(pathToScan);
-        const root = await getSubtree(result.rootId);
-        setSummary(result);
-        setCurrentViewNode(root);
-        setBreadcrumbs([root]);
-      } catch (error) {
-        console.error("Scan failed:", error);
-      } finally {
-        setIsScanning(false);
-      }
-    },
-    [currentPath],
-  );
+  const handleCancelScan = useCallback(() => {
+    void cancelScan();
+  }, []);
 
   const handleNodeDoubleClick = useCallback(async (node: FileNode) => {
     if (node.type !== "directory") return;
@@ -113,10 +116,11 @@ function App() {
       const fresh = await getSubtree(node.id);
       if (!fresh.children || fresh.children.length === 0) return;
       setForwardStack([]);
+      setSelectedNode(null);
       setCurrentViewNode(fresh);
       setBreadcrumbs((prev) => [...prev, fresh]);
-    } catch (error) {
-      console.error("Failed to load directory:", error);
+    } catch (err) {
+      setError(String(err));
     }
   }, []);
 
@@ -127,10 +131,11 @@ function App() {
       try {
         const fresh = await getSubtree(target.id);
         setForwardStack([]);
+        setSelectedNode(null);
         setBreadcrumbs((prev) => prev.slice(0, index + 1));
         setCurrentViewNode(fresh);
-      } catch (error) {
-        console.error("Failed to navigate:", error);
+      } catch (err) {
+        setError(String(err));
       }
     },
     [breadcrumbs],
@@ -143,6 +148,7 @@ function App() {
         const newSummary = await deleteNode(node.id);
         setSummary(newSummary);
         const fresh = await getSubtree(currentViewNode.id);
+        setSelectedNode(null);
         setCurrentViewNode(fresh);
       } catch (error) {
         console.error("Incremental delete failed, falling back to full rescan:", error);
@@ -160,9 +166,10 @@ function App() {
       const fresh = await getSubtree(target.id);
       setForwardStack((prev) => [currentTip, ...prev]);
       setBreadcrumbs((prev) => prev.slice(0, -1));
+      setSelectedNode(null);
       setCurrentViewNode(fresh);
-    } catch (error) {
-      console.error("Failed to go back:", error);
+    } catch (err) {
+      setError(String(err));
     }
   }, [breadcrumbs]);
 
@@ -172,10 +179,11 @@ function App() {
     try {
       const fresh = await getSubtree(next.id);
       setBreadcrumbs((prev) => [...prev, fresh]);
+      setSelectedNode(null);
       setCurrentViewNode(fresh);
       setForwardStack(rest);
-    } catch (error) {
-      console.error("Failed to go forward:", error);
+    } catch (err) {
+      setError(String(err));
       setForwardStack([]);
     }
   }, [forwardStack]);
@@ -211,7 +219,6 @@ function App() {
             break;
         }
       }
-
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -242,6 +249,33 @@ function App() {
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Drag-and-drop a folder onto the window to analyze it ────────────────────
+  const isScanningRef = useRef(isScanning);
+  isScanningRef.current = isScanning;
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const p = event.payload;
+        if (p.type === "enter" || p.type === "over") {
+          setIsDragOver(true);
+        } else if (p.type === "leave") {
+          setIsDragOver(false);
+        } else if (p.type === "drop") {
+          setIsDragOver(false);
+          if (isScanningRef.current) return;
+          const path = p.paths?.[0];
+          if (!path) return;
+          validatePath(path)
+            .then((ok) => { if (ok) void handleScanDirectory(path); })
+            .catch(() => {});
+        }
+      })
+      .then((fn) => { unlisten = fn; })
+      .catch(() => {});
+    return () => unlisten?.();
+  }, [handleScanDirectory]);
 
   // Trackpad swipe gesture using wheel events
   const swipeStateRef = useRef({ accumulatedBack: 0, accumulatedForward: 0, cooldownUntil: 0 });
@@ -303,125 +337,101 @@ function App() {
     };
   }, [handleWheel]);
 
+  const hasScan = !!(summary && currentViewNode);
+  const readoutNode = selectedNode ?? currentViewNode;
+
   return (
     <div className="h-screen bg-background overflow-hidden flex flex-col">
-      <main className="flex-1 flex flex-col overflow-hidden min-h-0 px-8 pt-6 pb-3">
-        {!isScanning && (
-          <div className="flex items-center justify-center mb-4 flex-shrink-0">
-            <div className="flex items-center space-x-4 w-full max-w-2xl">
-              <Input
-                value={currentPath}
-                onChange={(e) => setCurrentPath(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleScanDirectory();
-                }}
-                placeholder="Select a directory to analyze"
-                className="flex-1 h-12 text-sm"
-              />
-              <Button onClick={handleFolderPicker} variant="outline" className="h-12 px-4">
-                Browse
-              </Button>
-              <Button
-                onClick={() => handleScanDirectory()}
-                disabled={isScanning || !currentPath}
-                className="h-12 px-6 bg-primary hover:bg-primary/90"
-              >
-                Analyze
-              </Button>
-            </div>
-          </div>
-        )}
+      {hasScan && (
+        <TopBar
+          breadcrumbs={breadcrumbs}
+          onBreadcrumbClick={handleBreadcrumbClick}
+          onBreadcrumbContextMenu={(crumb) => void showBreadcrumbContextMenu(crumb)}
+          canGoBack={breadcrumbs.length > 1}
+          canGoForward={forwardStack.length > 0}
+          onBack={() => void handleGoBack()}
+          onForward={() => void handleGoForward()}
+          onOpen={() => void handleFolderPicker()}
+          currentViewNode={currentViewNode}
+          summary={summary}
+        />
+      )}
 
-        {isScanning && (
+      <main className="flex-1 flex flex-col overflow-hidden min-h-0 px-8 pt-5 pb-3">
+        {isScanning ? (
           <div className="flex items-center justify-center flex-1">
-            <ScanProgress progress={progress} rootPath={scannedPath.current} />
+            <ScanProgress progress={progress} rootPath={scannedPath.current} onCancel={handleCancelScan} />
           </div>
-        )}
-
-        {summary && currentViewNode && (
-            <div className="flex-1 min-h-0 border border-border/60 rounded-lg px-5 py-4 flex flex-col">
-              {breadcrumbs.length >= 1 && (
-                <div className="flex items-center text-xs text-muted-foreground font-mono pb-2 border-b border-border/40 mb-3 overflow-x-auto flex-shrink-0" style={{ userSelect: "none" }}>
-                  {breadcrumbs.map((crumb, index) => (
-                    <React.Fragment key={crumb.id}>
-                      <button
-                        type="button"
-                        onClick={() => handleBreadcrumbClick(index)}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          void showBreadcrumbContextMenu(crumb);
-                        }}
-                        className={`px-1.5 py-1 hover:text-foreground transition-colors whitespace-nowrap select-none ${
-                          index === breadcrumbs.length - 1
-                            ? "text-foreground font-medium cursor-default"
-                            : "hover:text-foreground cursor-pointer"
-                        }`}
-                      >
-                        {crumb.name}
-                      </button>
-                      {index < breadcrumbs.length - 1 && (
-                        <span className="text-muted-foreground/30 select-none">/</span>
-                      )}
-                    </React.Fragment>
-                  ))}
-                </div>
+        ) : error ? (
+          <ErrorState
+            message={error}
+            onRetry={scannedPath.current ? () => void handleScanDirectory(scannedPath.current) : undefined}
+            onDismiss={() => setError(null)}
+          />
+        ) : hasScan ? (
+          <div className="flex-1 min-h-0 border border-border/60 rounded-lg p-4 flex flex-col">
+            <div className="flex-1 min-h-0">
+              {visualizationType === "treemap" ? (
+                <TreeMapChart
+                  data={currentViewNode}
+                  rampStops={rampStops}
+                  selectedId={selectedNode?.id}
+                  onNodeSelect={setSelectedNode}
+                  onNodeDoubleClick={handleNodeDoubleClick}
+                  onNodeDeleted={handleNodeDeleted}
+                />
+              ) : (
+                <SunburstChart
+                  data={currentViewNode}
+                  selectedId={selectedNode?.id}
+                  onNodeSelect={setSelectedNode}
+                  onNodeDoubleClick={handleNodeDoubleClick}
+                  onNodeDeleted={handleNodeDeleted}
+                />
               )}
-
-              <div className="flex-1 min-h-0">
-                {visualizationType === "treemap" ? (
-                  <TreeMapChart
-                    data={currentViewNode}
-                    rampStops={rampStops}
-                    onNodeDoubleClick={handleNodeDoubleClick}
-                    onNodeDeleted={handleNodeDeleted}
-                  />
-                ) : (
-                  <SunburstChart
-                    data={currentViewNode}
-                    onNodeDoubleClick={handleNodeDoubleClick}
-                    onNodeDeleted={handleNodeDeleted}
-                  />
-                )}
-              </div>
             </div>
-        )}
 
-        {!summary && !isScanning && (
-          <div className="flex flex-col items-center justify-center flex-1 space-y-4">
-            <div className="bg-muted/30 p-6 rounded-full">
-              <HardDriveIcon className="h-12 w-12 text-muted-foreground" />
+            {/* Viz footer strip: detail readout + (treemap) color legend */}
+            <div className="flex items-center justify-between gap-4 pt-3 mt-3 border-t border-border/60">
+              <DetailReadout
+                node={readoutNode}
+                parentSize={currentViewNode.size}
+                isSelection={!!selectedNode}
+              />
+              {visualizationType === "treemap" && <ColorScaleLegend rampStops={rampStops} />}
+            </div>
+          </div>
+        ) : (
+          <div
+            className={cn(
+              "flex flex-col items-center justify-center flex-1 space-y-5 rounded-lg transition-colors",
+              isDragOver && "bg-primary/5 outline-dashed outline-2 outline-primary/40",
+            )}
+          >
+            <div className={cn("p-6 rounded-full transition-colors", isDragOver ? "bg-primary/15" : "bg-muted/30")}>
+              <HardDriveIcon className={cn("h-12 w-12", isDragOver ? "text-primary" : "text-muted-foreground")} />
             </div>
             <div className="text-center space-y-2">
-              <h3 className="text-xl font-semibold text-foreground">Choose a directory</h3>
-              <p className="text-muted-foreground">
-                Select a folder above to visualize what's using your space
+              <h3 className="text-xl font-semibold text-foreground">
+                {isDragOver ? "Drop to analyze" : "Choose a directory"}
+              </h3>
+              <p className="text-muted-foreground text-sm">
+                Drag a folder here, or browse to visualize what&apos;s using your space
               </p>
             </div>
+            <Button onClick={handleFolderPicker}>Browse…</Button>
+            <p className="micro-label text-muted-foreground">Open folder · ⌘O</p>
           </div>
         )}
       </main>
 
-      <footer className="border-t border-border/40 px-6 py-3 flex-shrink-0 bg-muted/30">
+      <footer className="border-t border-border/60 px-6 py-2 flex-shrink-0 bg-muted/30">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
-          {/* Left: brand + live stats */}
-          <div className="flex items-center space-x-3">
-            <span className="font-semibold text-foreground">diskviz</span>
-            {summary && currentViewNode && (
-              <>
-                <span className="text-border">·</span>
-                <span className="font-mono tabular-nums">{formatFileSize(currentViewNode.size)}</span>
-                <span className="text-border">·</span>
-                <span className="font-mono tabular-nums">{currentViewNode.fileCount.toLocaleString()} files</span>
-                <span className="text-border">·</span>
-                <span className="font-mono tabular-nums">{currentViewNode.dirCount.toLocaleString()} dirs</span>
-                <span className="text-border">·</span>
-                <span className="font-mono tabular-nums">{formatDuration(summary.scanDurationMs)}</span>
-              </>
-            )}
-          </div>
+          {/* Left: a quiet interaction hint */}
+          <span className="micro-label hidden sm:inline">Double-click to drill in · right-click for actions</span>
 
-          {/* Right: controls */}
-          <div className="flex items-center space-x-3">
+          {/* Right: settings */}
+          <div className="flex items-center gap-3">
             <AccentPicker
               accent={accent}
               setAccent={setAccent as (a: AccentColor) => void}
@@ -429,16 +439,15 @@ function App() {
               resolvedFlavor={resolvedFlavor}
             />
 
-            <span className="text-border">·</span>
+            <Dot />
 
             <ThemePicker
               theme={theme}
               setTheme={setTheme as (t: ThemeSetting) => void}
             />
 
-            <span className="text-border">·</span>
+            <Dot />
 
-            {/* View toggle */}
             <ToggleGroup
               type="single"
               value={visualizationType}
@@ -458,27 +467,29 @@ function App() {
               </ToggleGroupItem>
             </ToggleGroup>
 
-            <span className="text-border">·</span>
+            <Dot />
 
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setShowShortcuts((s) => !s)}
-              className="flex items-center gap-1.5 border border-border/60 rounded px-2 py-0.5 hover:bg-muted/60 hover:text-foreground hover:border-border transition-colors"
-              title="Keyboard shortcuts (Cmd+?)"
+              className="gap-1.5"
+              title="Keyboard shortcuts (⌘?)"
             >
-              <KeyboardIcon className="w-3 h-3" />
-              <span>Shortcuts</span>
-            </button>
+              <KeyboardIcon className="w-3.5 h-3.5" />
+              Shortcuts
+            </Button>
 
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setShowNotices(true)}
-              className="flex items-center gap-1.5 border border-border/60 rounded px-2 py-0.5 hover:bg-muted/60 hover:text-foreground hover:border-border transition-colors"
+              className="gap-1.5"
               title="Open-source notices"
             >
-              <InfoIcon className="w-3 h-3" />
-              <span>Notices</span>
-            </button>
+              <InfoIcon className="w-3.5 h-3.5" />
+              Notices
+            </Button>
           </div>
         </div>
       </footer>
@@ -493,37 +504,32 @@ function App() {
           onClose={() => setShowShortcuts(false)}
         >
           <div className="space-y-3 text-sm">
-            <div className="flex justify-between items-center">
-              <span className="text-muted-foreground">Open folder</span>
-              <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘O</kbd>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-muted-foreground">Drill into folder</span>
-              <span className="text-xs text-muted-foreground">Double-click</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-muted-foreground">Swipe to navigate</span>
-              <span className="text-xs text-muted-foreground">← →</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-muted-foreground">Navigate to parent</span>
-              <span className="text-xs text-muted-foreground">Click breadcrumb</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-muted-foreground">Navigate back / forward</span>
-              <div className="flex items-center gap-1">
-                <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘Z</kbd>
-                <span className="text-muted-foreground text-xs">/</span>
-                <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘⇧Z</kbd>
-              </div>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-muted-foreground">Show shortcuts</span>
-              <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">⌘?</kbd>
-            </div>
+            <ShortcutRow label="Open folder" keys={["⌘O"]} />
+            <ShortcutRow label="Drill into folder" keys={["Double-click"]} />
+            <ShortcutRow label="Select an item" keys={["Click"]} />
+            <ShortcutRow label="Navigate back / forward" keys={["⌘Z", "⌘⇧Z"]} />
+            <ShortcutRow label="Swipe to navigate back / forward" keys={["← →"]} />
+            <ShortcutRow label="Jump to an ancestor" keys={["Click breadcrumb"]} />
+            <ShortcutRow label="Show shortcuts" keys={["⌘?"]} />
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+function ShortcutRow({ label, keys }: { label: string; keys: string[] }) {
+  return (
+    <div className="flex justify-between items-center">
+      <span className="text-muted-foreground">{label}</span>
+      <div className="flex items-center gap-1">
+        {keys.map((k, i) => (
+          <span key={k} className="flex items-center gap-1">
+            {i > 0 && <span className="text-muted-foreground text-xs">/</span>}
+            <kbd className="bg-muted px-2 py-1 rounded text-xs font-mono">{k}</kbd>
+          </span>
+        ))}
+      </div>
     </div>
   );
 }

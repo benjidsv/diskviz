@@ -97,6 +97,17 @@ fn build_dto(tree: &ScanTree, idx: u32, depth_left: usize, max_children: usize) 
             children.push(build_dto(tree, c, depth_left - 1, max_children));
         }
     }
+    // Aggregate the immediate children that were truncated away so the UI can
+    // render an "Other" bucket. Always reflects the full child list regardless
+    // of `depth_left`, so a leaf-depth directory still reports what it hides.
+    let included = children.len();
+    let hidden_children = node.children.len().saturating_sub(included) as u64;
+    let hidden_size: u64 = node
+        .children
+        .iter()
+        .skip(included)
+        .map(|&c| tree.nodes[c as usize].size)
+        .sum();
     FileNodeDto {
         id: idx.to_string(),
         name: display_name(tree, idx),
@@ -106,6 +117,8 @@ fn build_dto(tree: &ScanTree, idx: u32, depth_left: usize, max_children: usize) 
         file_count: node.file_count,
         dir_count: node.dir_count,
         children,
+        hidden_children,
+        hidden_size,
         last_modified: node.mtime,
         is_hidden: node.is_hidden,
         permissions: String::new(),

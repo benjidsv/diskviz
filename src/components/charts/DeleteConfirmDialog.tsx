@@ -49,7 +49,14 @@ export const DeleteConfirmDialog: React.FC<DeleteConfirmDialogProps> = ({
         <div className="text-sm text-muted-foreground font-mono tabular-nums">Size: {formatFileSize(node.size)}</div>
         {isDir && (
           <div className="text-sm text-destructive">
-            This includes the directory and all of its contents.
+            This includes the directory and all of its contents
+            {node.fileCount > 0 || node.dirCount > 0 ? (
+              <span className="font-mono tabular-nums">
+                {" "}
+                ({node.fileCount.toLocaleString()} files, {node.dirCount.toLocaleString()} folders)
+              </span>
+            ) : null}
+            .
           </div>
         )}
         <AlertDialogFooter>

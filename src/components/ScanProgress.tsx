@@ -3,10 +3,12 @@ import { useEffect, useRef, useState } from "react";
 import { HardDriveIcon } from "lucide-react";
 import type { ScanProgress as Progress } from "@/types";
 import { formatFileSize, formatNumber } from "@/utils/formatters";
+import { Button } from "@/components/ui/button";
 
 interface ScanProgressProps {
   progress: Progress | null;
   rootPath: string;
+  onCancel: () => void;
 }
 
 const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
@@ -16,7 +18,7 @@ const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   </div>
 );
 
-const ScanProgress: React.FC<ScanProgressProps> = ({ progress, rootPath }) => {
+const ScanProgress: React.FC<ScanProgressProps> = ({ progress, rootPath, onCancel }) => {
   const pct = Math.max(0, Math.min(100, progress?.percent ?? 0));
   const startedAt = useRef(Date.now());
   const [elapsed, setElapsed] = useState(0);
@@ -47,7 +49,14 @@ const ScanProgress: React.FC<ScanProgressProps> = ({ progress, rootPath }) => {
             {elapsed}s · {pct.toFixed(0)}%
           </span>
         </div>
-        <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className="h-2.5 w-full overflow-hidden rounded-full bg-muted"
+          role="progressbar"
+          aria-label="Scan progress"
+          aria-valuenow={Math.round(pct)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
           <div
             className="h-full rounded-full bg-primary transition-[width] duration-200 ease-out"
             style={{ width: `${pct}%` }}
@@ -59,6 +68,12 @@ const ScanProgress: React.FC<ScanProgressProps> = ({ progress, rootPath }) => {
         <Stat label="Files" value={formatNumber(progress?.filesScanned ?? 0)} />
         <Stat label="Folders" value={formatNumber(progress?.directoriesScanned ?? 0)} />
         <Stat label="Scanned" value={formatFileSize(progress?.bytesScanned ?? 0)} />
+      </div>
+
+      <div className="flex justify-center">
+        <Button variant="outline" size="sm" onClick={onCancel}>
+          Cancel scan
+        </Button>
       </div>
     </div>
   );

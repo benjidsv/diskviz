@@ -10,6 +10,8 @@ import { showNodeContextMenu } from "@/hooks/useNativeContextMenu";
 
 interface SunburstChartProps {
   data: FileNode;
+  selectedId?: string;
+  onNodeSelect?: (node: FileNode) => void;
   onNodeDoubleClick?: (node: FileNode) => void;
   onNodeDeleted?: (node: FileNode) => void;
 }
@@ -25,6 +27,8 @@ interface SunburstNode {
 
 const SunburstChart: React.FC<SunburstChartProps> = ({
   data,
+  selectedId,
+  onNodeSelect,
   onNodeDoubleClick,
   onNodeDeleted,
 }) => {
@@ -226,16 +230,38 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
 
             const shouldShowText = endAngle - startAngle > 15 && outerRadius - innerRadius > 20;
             const fontSize = Math.min(12, (endAngle - startAngle) / 5, (outerRadius - innerRadius) / 3);
+            const isSelected = !!selectedId && node.id === selectedId;
+
+            // Width-aware label: long names survive on wide arcs, short ones
+            // still clip, instead of a blanket 8-char cut.
+            const arcLengthPx = ((endAngle - startAngle) * Math.PI / 180) * textRadius;
+            const maxChars = Math.max(2, Math.floor(arcLengthPx / (fontSize * 0.62)));
+            const label = node.name.length > maxChars
+              ? `${node.name.slice(0, Math.max(1, maxChars - 1))}…`
+              : node.name;
 
             return (
               <g key={`${node.path}-${index}`}>
                 <path
                   d={arcPath}
                   fill={color}
-                  stroke="var(--viz-stroke)"
-                  strokeWidth={1}
-                  className="cursor-pointer transition-all duration-300 hover:brightness-110"
+                  stroke={isSelected ? "var(--primary)" : "var(--viz-stroke)"}
+                  strokeWidth={isSelected ? 2.5 : 1}
+                  role="button"
+                  tabIndex={0}
+                  style={{ outline: "none" }}
+                  className="cursor-pointer transition-[filter] duration-200 hover:brightness-110"
                   aria-label={`${node.name} - ${formatFileSize(node.size)}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onNodeSelect?.(node);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onNodeSelect?.(node);
+                    }
+                  }}
                   onDoubleClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -266,7 +292,7 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
                     }}
                     transform={`rotate(${midAngle > 90 && midAngle < 270 ? midAngle + 180 : midAngle}, ${textX}, ${textY})`}
                   >
-                    {node.name.length > 8 ? `${node.name.substring(0, 8)}...` : node.name}
+                    {label}
                   </text>
                 )}
               </g>

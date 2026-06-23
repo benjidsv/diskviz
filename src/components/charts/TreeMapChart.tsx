@@ -1,7 +1,7 @@
 import type React from "react";
 import { useCallback, useState } from "react";
 import { ResponsiveContainer, Treemap } from "recharts";
-import { useTreeMapData } from "@/hooks/useTreeMapData";
+import { isOtherNode, useTreeMapData } from "@/hooks/useTreeMapData";
 import { useTreeMapInteraction } from "@/hooks/useTreeMapInteraction";
 import { formatFileSize } from "@/utils/formatters";
 import { interpolateStops, readableInk, rgbToCss } from "@/lib/colorScale";
@@ -13,7 +13,8 @@ import { showNodeContextMenu } from "@/hooks/useNativeContextMenu";
 interface TreeMapChartProps {
   data: FileNode;
   rampStops: string[];
-  onNodeClick?: (node: FileNode) => void;
+  selectedId?: string;
+  onNodeSelect?: (node: FileNode) => void;
   onNodeDoubleClick?: (node: FileNode) => void;
   onNodeDeleted?: (node: FileNode) => void;
 }
@@ -21,7 +22,8 @@ interface TreeMapChartProps {
 const TreeMapChart: React.FC<TreeMapChartProps> = ({
   data,
   rampStops,
-  onNodeClick,
+  selectedId,
+  onNodeSelect,
   onNodeDoubleClick,
   onNodeDeleted,
 }) => {
@@ -102,20 +104,24 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
     const cellRgb = interpolateStops(rampStops, Math.max(0, Math.min(1, t)));
     const fillCss = rgbToCss(cellRgb);
     const inkColor = readableInk(cellRgb);
+    const isOther = isOtherNode(originalNode);
+    const isSelected = !!selectedId && originalNode.id === selectedId;
 
     const handleClick = (e: React.MouseEvent) => {
       e.preventDefault();
-      onNodeClick?.(originalNode);
+      onNodeSelect?.(originalNode);
     };
 
     const handleDoubleClick = (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      if (isOther) return; // synthetic remainder tile — not navigable
       onNodeDoubleClick?.(originalNode);
     };
 
     const handleRightClick = (e: React.MouseEvent) => {
       e.preventDefault();
+      if (isOther) return; // no path to reveal/trash
       handleContextMenuEvent(originalNode);
     };
 
@@ -126,9 +132,13 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
     const handleKeyDown = (e: React.KeyboardEvent) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        onNodeClick?.(originalNode);
+        onNodeSelect?.(originalNode);
       }
     };
+
+    // Truncate to fit, using a proper ellipsis and a little horizontal padding.
+    const maxChars = Math.max(1, Math.floor((adjustedWidth - 8) / (fontSize * 0.58)));
+    const label = name.length > maxChars ? `${name.slice(0, Math.max(1, maxChars - 1))}…` : name;
 
     return (
       <g
@@ -149,8 +159,8 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
           width={adjustedWidth}
           height={adjustedHeight}
           fill={fillCss}
-          stroke="var(--viz-stroke)"
-          strokeWidth={isSmall ? 0.5 : 1}
+          stroke={isSelected ? "var(--primary)" : "var(--viz-stroke)"}
+          strokeWidth={isSelected ? 2 : isSmall ? 0.5 : 1}
           rx={4}
           ry={4}
         />
@@ -169,9 +179,7 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
                 fontFamily: "var(--font-sans)",
               }}
             >
-              {name.length > Math.floor(adjustedWidth / (fontSize * 0.6))
-                ? `${name.substring(0, Math.floor(adjustedWidth / (fontSize * 0.6)) - 3)}...`
-                : name}
+              {label}
             </text>
 
             {adjustedHeight > 60 && !isSmall && (
