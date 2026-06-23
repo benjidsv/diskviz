@@ -1,7 +1,9 @@
 import type React from "react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { formatFileSize } from "@/utils/formatters";
 import { openInFinder } from "@/lib/api";
+import { hexToRgb, readableInk } from "@/lib/colorScale";
+import { useThemeSettings, VIZ_SUN_COLORS } from "@/hooks/useThemeSettings";
 import type { FileNode } from "@/types";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import { TreeMapContextMenu } from "./TreeMapContextMenu";
@@ -29,6 +31,7 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
   onNodeDoubleClick,
   onNodeDeleted,
 }) => {
+  const { resolvedFlavor } = useThemeSettings();
   const [tooltip, setTooltip] = useState<{
     visible: boolean;
     x: number;
@@ -55,6 +58,12 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
   const getColor = useCallback((_size: number, _max: number, level: number): string => {
     return `var(--viz-sun-${level % 7})`;
   }, []);
+
+  // Pre-resolve arc fill hex per level for readable label ink calculation.
+  const arcInkColors = useMemo(
+    () => VIZ_SUN_COLORS[resolvedFlavor].map((hex) => readableInk(hexToRgb(hex))),
+    [resolvedFlavor],
+  );
 
   const calculateSunburstNodes = useCallback(
     (
@@ -274,12 +283,12 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
                     y={textY}
                     textAnchor="middle"
                     dominantBaseline="middle"
-                    fill="#ffffff"
+                    fill={arcInkColors[level % 7]}
                     fontSize={fontSize}
                     fontWeight="600"
                     className="pointer-events-none select-none"
                     style={{
-                      textShadow: "2px 2px 4px rgba(0,0,0,0.9)",
+                      textShadow: "0 1px 2px rgba(0,0,0,0.3)",
                       fontFamily: "system-ui, -apple-system, sans-serif",
                     }}
                     transform={`rotate(${midAngle > 90 && midAngle < 270 ? midAngle + 180 : midAngle}, ${textX}, ${textY})`}

@@ -9,7 +9,7 @@ interface ScanProgressProps {
 }
 
 const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <div className="rounded-lg border border-border/20 p-3">
+  <div className="rounded-lg border border-border/60 p-3">
     <div className="text-base font-semibold tabular-nums">{value}</div>
     <div className="text-xs text-muted-foreground">{label}</div>
   </div>

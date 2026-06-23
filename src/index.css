@@ -45,12 +45,12 @@
   --input:                   #bcc0cc; /* Surface 1 */
   --ring:                    #7287fd; /* Lavender */
 
-  /* Treemap fill ramp: largest items = most prominent accent */
-  --viz-ramp-5: #1e66f5; /* Blue   — ratio > 0.70 */
-  --viz-ramp-4: #8839ef; /* Mauve  — ratio > 0.50 */
-  --viz-ramp-3: #7c7f93; /* Overlay 2 */
-  --viz-ramp-2: #acb0be; /* Surface 2 */
-  --viz-ramp-1: #ccd0da; /* Surface 0 */
+  /* Treemap fill ramp: continuous perceptual gradient, small→large = neutral→vivid */
+  --viz-ramp-1: #ccd0da; /* Surface 0  — smallest, near-background */
+  --viz-ramp-2: #acb0be; /* Surface 2  — muted mid */
+  --viz-ramp-3: #7287fd; /* Lavender   — first color pop */
+  --viz-ramp-4: #209fb5; /* Sapphire   — rich teal-blue */
+  --viz-ramp-5: #1e66f5; /* Blue/accent — largest, vivid */
   --viz-stroke: #bcc0cc; /* Surface 1 */
 
   /* Sunburst level accent cycle (Blue → Sapphire → Teal → Green → Yellow → Peach → Mauve) */
@@ -85,11 +85,11 @@
   --input:                   #51576d; /* Surface 1 */
   --ring:                    #babbf1; /* Lavender */
 
-  --viz-ramp-5: #8caaee; /* Blue */
-  --viz-ramp-4: #ca9ee6; /* Mauve */
-  --viz-ramp-3: #949cbb; /* Overlay 2 */
-  --viz-ramp-2: #626880; /* Surface 2 */
-  --viz-ramp-1: #414559; /* Surface 0 */
+  --viz-ramp-1: #414559; /* Surface 0  — smallest */
+  --viz-ramp-2: #626880; /* Surface 2  — muted mid */
+  --viz-ramp-3: #babbf1; /* Lavender   — first color pop */
+  --viz-ramp-4: #85c1dc; /* Sapphire   — rich teal-blue */
+  --viz-ramp-5: #8caaee; /* Blue/accent — largest, vivid */
   --viz-stroke: #51576d; /* Surface 1 */
 
   --viz-sun-0: #8caaee;
@@ -123,11 +123,11 @@
   --input:                   #494d64; /* Surface 1 */
   --ring:                    #b7bdf8; /* Lavender */
 
-  --viz-ramp-5: #8aadf4; /* Blue */
-  --viz-ramp-4: #c6a0f6; /* Mauve */
-  --viz-ramp-3: #939ab7; /* Overlay 2 */
-  --viz-ramp-2: #5b6078; /* Surface 2 */
-  --viz-ramp-1: #363a4f; /* Surface 0 */
+  --viz-ramp-1: #363a4f; /* Surface 0  — smallest */
+  --viz-ramp-2: #5b6078; /* Surface 2  — muted mid */
+  --viz-ramp-3: #b7bdf8; /* Lavender   — first color pop */
+  --viz-ramp-4: #7dc4e4; /* Sapphire   — rich teal-blue */
+  --viz-ramp-5: #8aadf4; /* Blue/accent — largest, vivid */
   --viz-stroke: #494d64; /* Surface 1 */
 
   --viz-sun-0: #8aadf4;
@@ -161,11 +161,11 @@
   --input:                   #45475a; /* Surface 1 */
   --ring:                    #b4befe; /* Lavender */
 
-  --viz-ramp-5: #89b4fa; /* Blue */
-  --viz-ramp-4: #cba6f7; /* Mauve */
-  --viz-ramp-3: #9399b2; /* Overlay 2 */
-  --viz-ramp-2: #585b70; /* Surface 2 */
-  --viz-ramp-1: #313244; /* Surface 0 */
+  --viz-ramp-1: #313244; /* Surface 0  — smallest */
+  --viz-ramp-2: #585b70; /* Surface 2  — muted mid */
+  --viz-ramp-3: #b4befe; /* Lavender   — first color pop */
+  --viz-ramp-4: #74c7ec; /* Sapphire   — rich teal-blue */
+  --viz-ramp-5: #89b4fa; /* Blue/accent — largest, vivid */
   --viz-stroke: #45475a; /* Surface 1 */
 
   --viz-sun-0: #89b4fa;
@@ -200,11 +200,11 @@
     --border:                  #45475a;
     --input:                   #45475a;
     --ring:                    #b4befe;
-    --viz-ramp-5: #89b4fa;
-    --viz-ramp-4: #cba6f7;
-    --viz-ramp-3: #9399b2;
-    --viz-ramp-2: #585b70;
     --viz-ramp-1: #313244;
+    --viz-ramp-2: #585b70;
+    --viz-ramp-3: #b4befe;
+    --viz-ramp-4: #74c7ec;
+    --viz-ramp-5: #89b4fa;
     --viz-stroke: #45475a;
     --viz-sun-0: #89b4fa;
     --viz-sun-1: #74c7ec;
@@ -237,11 +237,11 @@
     --border:                  #bcc0cc;
     --input:                   #bcc0cc;
     --ring:                    #7287fd;
-    --viz-ramp-5: #1e66f5;
-    --viz-ramp-4: #8839ef;
-    --viz-ramp-3: #7c7f93;
-    --viz-ramp-2: #acb0be;
     --viz-ramp-1: #ccd0da;
+    --viz-ramp-2: #acb0be;
+    --viz-ramp-3: #7287fd;
+    --viz-ramp-4: #209fb5;
+    --viz-ramp-5: #1e66f5;
     --viz-stroke: #bcc0cc;
     --viz-sun-0: #1e66f5;
     --viz-sun-1: #209fb5;
@@ -255,6 +255,12 @@
 
 * {
   border-color: var(--border);
+}
+
+/* SVG treemap tile focus ring — outline isn't supported on SVG elements in WebKit */
+g[role="button"]:focus-visible rect {
+  stroke: var(--ring) !important;
+  stroke-width: 2 !important;
 }
 
 html,

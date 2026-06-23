@@ -28,7 +28,12 @@ export const useTreeMapData = (node: FileNode | null, maxItems = 20) => {
     return Math.max(...data.map((d) => d.size));
   }, [data]);
 
+  const minSize = useMemo(() => {
+    if (data.length === 0) return 0;
+    return Math.min(...data.map((d) => d.size));
+  }, [data]);
+
   const totalSize = useMemo(() => node?.size || 0, [node]);
 
-  return { data, maxSize, totalSize };
+  return { data, maxSize, minSize, totalSize };
 };

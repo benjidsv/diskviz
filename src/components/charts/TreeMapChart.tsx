@@ -5,6 +5,7 @@ import { useTreeMapData } from "@/hooks/useTreeMapData";
 import { useTreeMapInteraction } from "@/hooks/useTreeMapInteraction";
 import { formatFileSize } from "@/utils/formatters";
 import { openInFinder } from "@/lib/api";
+import { interpolateStops, readableInk, rgbToCss } from "@/lib/colorScale";
 import type { FileNode } from "@/types";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import { TreeMapContextMenu } from "./TreeMapContextMenu";
@@ -12,6 +13,7 @@ import { TreeMapTooltip } from "./TreeMapTooltip";
 
 interface TreeMapChartProps {
   data: FileNode;
+  rampStops: string[];
   onNodeClick?: (node: FileNode) => void;
   onNodeDoubleClick?: (node: FileNode) => void;
   onNodeDeleted?: (node: FileNode) => void;
@@ -19,25 +21,17 @@ interface TreeMapChartProps {
 
 const TreeMapChart: React.FC<TreeMapChartProps> = ({
   data,
+  rampStops,
   onNodeClick,
   onNodeDoubleClick,
   onNodeDeleted,
 }) => {
-  const { data: treeMapData, maxSize, totalSize } = useTreeMapData(data);
+  const { data: treeMapData, maxSize, minSize, totalSize } = useTreeMapData(data);
   const { tooltip, contextMenuNode, handleMouseEnter, handleMouseLeave, handleContextMenu } =
     useTreeMapInteraction();
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedNode, setSelectedNode] = useState<FileNode | null>(null);
-
-  const getColor = useCallback((size: number, max: number): string => {
-    const ratio = size / max;
-    if (ratio > 0.7) return "var(--viz-ramp-5)";
-    if (ratio > 0.5) return "var(--viz-ramp-4)";
-    if (ratio > 0.3) return "var(--viz-ramp-3)";
-    if (ratio > 0.15) return "var(--viz-ramp-2)";
-    return "var(--viz-ramp-1)";
-  }, []);
 
   const handleOpenInFinder = useCallback(async (node: FileNode) => {
     try {
@@ -104,6 +98,16 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
     );
     const shouldShowText = adjustedWidth > 30 && adjustedHeight > 20;
 
+    // Continuous size → color mapping using log-normalized t in [0,1]
+    const logMin = Math.log(minSize + 1);
+    const logMax = Math.log(maxSize + 1);
+    const t = logMax > logMin
+      ? (Math.log(size + 1) - logMin) / (logMax - logMin)
+      : 1;
+    const cellRgb = interpolateStops(rampStops, Math.max(0, Math.min(1, t)));
+    const fillCss = rgbToCss(cellRgb);
+    const inkColor = readableInk(cellRgb);
+
     const handleClick = (e: React.MouseEvent) => {
       e.preventDefault();
       onNodeClick?.(originalNode);
@@ -123,23 +127,31 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
       handleMouseEnter({ name, size, originalNode }, e);
     };
 
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onNodeClick?.(originalNode);
+      }
+    };
+
     return (
       <g
         role="button"
         tabIndex={0}
-        style={{ cursor: "pointer" }}
+        style={{ cursor: "pointer", outline: "none" }}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenuEvent}
         onMouseEnter={handleMouseEnterEvent}
         onMouseLeave={handleMouseLeave}
+        onKeyDown={handleKeyDown}
       >
         <rect
           x={adjustedX}
           y={adjustedY}
           width={adjustedWidth}
           height={adjustedHeight}
-          fill={getColor(size, maxSize)}
+          fill={fillCss}
           stroke="var(--viz-stroke)"
           strokeWidth={isSmall ? 0.5 : 1}
           rx={4}
@@ -152,11 +164,11 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
               x={adjustedX + adjustedWidth / 2}
               y={adjustedY + adjustedHeight / 2 - (isSmall ? 0 : fontSize / 4)}
               textAnchor="middle"
-              fill="#ffffff"
+              fill={inkColor}
               fontSize={fontSize}
               fontWeight="600"
               style={{
-                textShadow: "2px 2px 4px rgba(0,0,0,0.9)",
+                textShadow: `0 1px 2px rgba(0,0,0,0.3)`,
                 fontFamily: "system-ui, -apple-system, sans-serif",
               }}
             >
@@ -170,11 +182,11 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
                 x={adjustedX + adjustedWidth / 2}
                 y={adjustedY + adjustedHeight / 2 + fontSize / 2 + 4}
                 textAnchor="middle"
-                fill="#ffffff"
+                fill={inkColor}
                 fontSize={fontSize * 0.75}
                 fontWeight="500"
                 style={{
-                  textShadow: "2px 2px 4px rgba(0,0,0,0.9)",
+                  textShadow: `0 1px 2px rgba(0,0,0,0.3)`,
                   fontFamily: "system-ui, -apple-system, sans-serif",
                 }}
               >
