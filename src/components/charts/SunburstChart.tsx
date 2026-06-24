@@ -1,8 +1,10 @@
 import type React from "react";
 import { useCallback, useMemo, useState } from "react";
 import { formatFileSize } from "@/utils/formatters";
-import { hexToRgb, readableInk } from "@/lib/colorScale";
+import { hexToRgb, readableInk, rgbToCss } from "@/lib/colorScale";
 import { useThemeSettings, VIZ_SUN_COLORS } from "@/hooks/useThemeSettings";
+import { activenessColorRgb } from "./vizColor";
+import type { ColorMode } from "@/hooks/useVisualizationSettings";
 import type { FileNode } from "@/types";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import { TreeMapTooltip } from "./TreeMapTooltip";
@@ -10,6 +12,11 @@ import { showNodeContextMenu } from "@/hooks/useNativeContextMenu";
 
 interface SunburstChartProps {
   data: FileNode;
+  colorMode: ColorMode;
+  ageRampStops: string[];
+  ageThresholdDays: number;
+  selectedId?: string;
+  onNodeSelect?: (node: FileNode | null) => void;
   onNodeDoubleClick?: (node: FileNode) => void;
   onNodeDeleted?: (node: FileNode) => void;
 }
@@ -25,6 +32,11 @@ interface SunburstNode {
 
 const SunburstChart: React.FC<SunburstChartProps> = ({
   data,
+  colorMode,
+  ageRampStops,
+  ageThresholdDays,
+  selectedId,
+  onNodeSelect,
   onNodeDoubleClick,
   onNodeDeleted,
 }) => {
@@ -216,7 +228,12 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
             if (endAngle - startAngle < 1) return null;
 
             const arcPath = createArcPath(startAngle, endAngle, innerRadius, outerRadius);
-            const color = getColor(node.size, maxSize, level);
+            const ageRgb =
+              colorMode === "activeness"
+                ? activenessColorRgb(node.medianMtime, ageRampStops, ageThresholdDays)
+                : null;
+            const color = ageRgb ? rgbToCss(ageRgb) : getColor(node.size, maxSize, level);
+            const inkColor = ageRgb ? readableInk(ageRgb) : arcInkColors[level % 7];
 
             const midAngle = (startAngle + endAngle) / 2;
             const midAngleRad = (midAngle - 90) * (Math.PI / 180);
@@ -226,16 +243,38 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
 
             const shouldShowText = endAngle - startAngle > 15 && outerRadius - innerRadius > 20;
             const fontSize = Math.min(12, (endAngle - startAngle) / 5, (outerRadius - innerRadius) / 3);
+            const isSelected = !!selectedId && node.id === selectedId;
+
+            // Width-aware label: long names survive on wide arcs, short ones
+            // still clip, instead of a blanket 8-char cut.
+            const arcLengthPx = ((endAngle - startAngle) * Math.PI / 180) * textRadius;
+            const maxChars = Math.max(2, Math.floor(arcLengthPx / (fontSize * 0.62)));
+            const label = node.name.length > maxChars
+              ? `${node.name.slice(0, Math.max(1, maxChars - 1))}…`
+              : node.name;
 
             return (
               <g key={`${node.path}-${index}`}>
                 <path
                   d={arcPath}
                   fill={color}
-                  stroke="var(--viz-stroke)"
-                  strokeWidth={1}
-                  className="cursor-pointer transition-all duration-300 hover:brightness-110"
+                  stroke={isSelected ? "var(--primary)" : "var(--viz-stroke)"}
+                  strokeWidth={isSelected ? 2.5 : 1}
+                  role="button"
+                  tabIndex={0}
+                  style={{ outline: "none" }}
+                  className="cursor-pointer transition-[filter] duration-200 hover:brightness-110"
                   aria-label={`${node.name} - ${formatFileSize(node.size)}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onNodeSelect?.(isSelected ? null : node);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onNodeSelect?.(isSelected ? null : node);
+                    }
+                  }}
                   onDoubleClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -256,7 +295,7 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
                     y={textY}
                     textAnchor="middle"
                     dominantBaseline="middle"
-                    fill={arcInkColors[level % 7]}
+                    fill={inkColor}
                     fontSize={fontSize}
                     fontWeight="600"
                     className="pointer-events-none select-none"
@@ -266,7 +305,7 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
                     }}
                     transform={`rotate(${midAngle > 90 && midAngle < 270 ? midAngle + 180 : midAngle}, ${textX}, ${textY})`}
                   >
-                    {node.name.length > 8 ? `${node.name.substring(0, 8)}...` : node.name}
+                    {label}
                   </text>
                 )}
               </g>

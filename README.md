@@ -15,8 +15,16 @@ the [Catppuccin](https://github.com/catppuccin/catppuccin) palette (MIT).
 ## Features
 
 - **Two visualizations** — TreeMap and Sunburst, toggle between them live.
+- **Color by size or age** — switch the color mode between *size* (big tiles
+  glow) and *activeness*, which tints each folder by the median age of its
+  files (fresh → green, dormant → red) against a configurable threshold, so
+  stale space jumps out.
+- **File-type composition** — every folder shows its mix of file types as a
+  click-to-expand donut (e.g. `PNG 67% · MP4 18% · …`), with the long tail
+  summed into an honest "Other" slice.
 - **Drill-down navigation** — double-click any folder to descend; breadcrumbs
-  to climb back out.
+  to climb back out. Crowded folders collapse their long tail into an "Other"
+  tile that's adaptively sized (never the biggest tile) and still drillable.
 - **Real progress bar** — a genuine determinate bar (not a spinner), with a
   denominator derived from actual volume usage via `statvfs`.
 - **Accurate sizes** — reports *allocated* size (disk blocks), matching `du`,
@@ -45,8 +53,10 @@ The speed comes from three deliberate choices working together:
 
 2. **The full tree stays in Rust.** It lives in Tauri managed state. The
    frontend never receives the whole tree — it pulls only the bounded slice it's
-   currently rendering via `get_subtree(nodeId, maxDepth, maxChildren)`, so IPC
-   payloads stay tiny no matter how many millions of files were scanned.
+   currently rendering via `get_subtree(nodeId, maxDepth, maxChildren, offset)`,
+   which also rolls up that subtree's file-type composition and median file age
+   on demand, so IPC payloads stay tiny no matter how many millions of files
+   were scanned.
 
 3. **Streamed progress.** The scan emits throttled `scan-progress` events
    (~every 80 ms / 4k entries) that drive the determinate progress bar.
@@ -66,10 +76,12 @@ Defined in `src-tauri/src/commands.rs`, called from `src/lib/api.ts`:
 | Command | Purpose |
 | --- | --- |
 | `scan_directory(path)` | Run the parallel walk; stream progress; return totals |
-| `get_subtree(nodeId, maxDepth?, maxChildren?)` | Bounded slice of the tree for rendering |
+| `cancel_scan()` | Abort the in-flight scan (polled mid-walk) |
+| `get_subtree(nodeId, maxDepth?, maxChildren?, offset?)` | Bounded slice of the tree for rendering, with per-node file-type and median-age stats; `offset` paginates the "Other" bucket |
 | `get_home_directory()` / `get_common_directories()` | Sensible default scan targets |
 | `validate_path(path)` | Check a typed path is a directory |
-| `delete_path(path)` | Move to system Trash (reversible) |
+| `delete_path(path)` | Move a path to system Trash (reversible) |
+| `delete_node(nodeId)` | Trash a node and update in-memory totals without a rescan |
 | `open_in_finder(path)` | Reveal in Finder |
 
 ## Tech stack

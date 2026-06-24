@@ -1,10 +1,12 @@
 import type React from "react";
 import { useCallback, useState } from "react";
 import { ResponsiveContainer, Treemap } from "recharts";
-import { useTreeMapData } from "@/hooks/useTreeMapData";
+import { isOtherNode, useTreeMapData } from "@/hooks/useTreeMapData";
 import { useTreeMapInteraction } from "@/hooks/useTreeMapInteraction";
 import { formatFileSize } from "@/utils/formatters";
-import { interpolateStops, readableInk, rgbToCss } from "@/lib/colorScale";
+import { readableInk, rgbToCss } from "@/lib/colorScale";
+import { activenessColorRgb, neutralRgb, sizeColorRgb } from "./vizColor";
+import type { ColorMode } from "@/hooks/useVisualizationSettings";
 import type { FileNode } from "@/types";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import { TreeMapTooltip } from "./TreeMapTooltip";
@@ -13,7 +15,11 @@ import { showNodeContextMenu } from "@/hooks/useNativeContextMenu";
 interface TreeMapChartProps {
   data: FileNode;
   rampStops: string[];
-  onNodeClick?: (node: FileNode) => void;
+  colorMode: ColorMode;
+  ageRampStops: string[];
+  ageThresholdDays: number;
+  selectedId?: string;
+  onNodeSelect?: (node: FileNode | null) => void;
   onNodeDoubleClick?: (node: FileNode) => void;
   onNodeDeleted?: (node: FileNode) => void;
 }
@@ -21,7 +27,11 @@ interface TreeMapChartProps {
 const TreeMapChart: React.FC<TreeMapChartProps> = ({
   data,
   rampStops,
-  onNodeClick,
+  colorMode,
+  ageRampStops,
+  ageThresholdDays,
+  selectedId,
+  onNodeSelect,
   onNodeDoubleClick,
   onNodeDeleted,
 }) => {
@@ -93,29 +103,32 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
     );
     const shouldShowText = adjustedWidth > 30 && adjustedHeight > 20;
 
-    // Continuous size → color mapping using log-normalized t in [0,1]
-    const logMin = Math.log(minSize + 1);
-    const logMax = Math.log(maxSize + 1);
-    const t = logMax > logMin
-      ? (Math.log(size + 1) - logMin) / (logMax - logMin)
-      : 1;
-    const cellRgb = interpolateStops(rampStops, Math.max(0, Math.min(1, t)));
+    const isOther = isOtherNode(originalNode);
+    const cellRgb =
+      colorMode === "activeness"
+        ? (!isOther &&
+            activenessColorRgb(originalNode.medianMtime, ageRampStops, ageThresholdDays)) ||
+          neutralRgb(rampStops)
+        : sizeColorRgb(size, minSize, maxSize, rampStops);
     const fillCss = rgbToCss(cellRgb);
     const inkColor = readableInk(cellRgb);
+    const isSelected = !!selectedId && originalNode.id === selectedId;
 
     const handleClick = (e: React.MouseEvent) => {
       e.preventDefault();
-      onNodeClick?.(originalNode);
+      onNodeSelect?.(isSelected ? null : originalNode);
     };
 
     const handleDoubleClick = (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      // "Other" is drillable: App pages into the next batch of children.
       onNodeDoubleClick?.(originalNode);
     };
 
     const handleRightClick = (e: React.MouseEvent) => {
       e.preventDefault();
+      if (isOther) return; // synthetic group — no single path to reveal/trash
       handleContextMenuEvent(originalNode);
     };
 
@@ -126,9 +139,13 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
     const handleKeyDown = (e: React.KeyboardEvent) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        onNodeClick?.(originalNode);
+        onNodeSelect?.(isSelected ? null : originalNode);
       }
     };
+
+    // Truncate to fit, using a proper ellipsis and a little horizontal padding.
+    const maxChars = Math.max(1, Math.floor((adjustedWidth - 8) / (fontSize * 0.58)));
+    const label = name.length > maxChars ? `${name.slice(0, Math.max(1, maxChars - 1))}…` : name;
 
     return (
       <g
@@ -149,8 +166,8 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
           width={adjustedWidth}
           height={adjustedHeight}
           fill={fillCss}
-          stroke="var(--viz-stroke)"
-          strokeWidth={isSmall ? 0.5 : 1}
+          stroke={isSelected ? "var(--primary)" : "var(--viz-stroke)"}
+          strokeWidth={isSelected ? 2 : isSmall ? 0.5 : 1}
           rx={4}
           ry={4}
         />
@@ -169,18 +186,16 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
                 fontFamily: "var(--font-sans)",
               }}
             >
-              {name.length > Math.floor(adjustedWidth / (fontSize * 0.6))
-                ? `${name.substring(0, Math.floor(adjustedWidth / (fontSize * 0.6)) - 3)}...`
-                : name}
+              {label}
             </text>
 
-            {adjustedHeight > 60 && !isSmall && (
+            {adjustedHeight > 40 && adjustedWidth > 40 && (
               <text
                 x={adjustedX + adjustedWidth / 2}
                 y={adjustedY + adjustedHeight / 2 + fontSize / 2 + 4}
                 textAnchor="middle"
                 fill={inkColor}
-                fontSize={fontSize * 0.75}
+                fontSize={Math.max(9, fontSize * 0.75)}
                 fontWeight="500"
                 style={{
                   textShadow: `0 1px 2px rgba(0,0,0,0.3)`,

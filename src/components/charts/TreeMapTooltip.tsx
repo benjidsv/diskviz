@@ -1,7 +1,9 @@
 import type React from "react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { FileIcon, FolderIcon } from "lucide-react";
-import { formatFileSize, formatPercentage } from "@/utils/formatters";
+import { formatAge, formatFileSize, formatPercentage } from "@/utils/formatters";
+import { useThemeSettings, VIZ_SUN_COLORS } from "@/hooks/useThemeSettings";
+import { compositionSlices, topTypesText, TypeCompositionBar } from "./TypeCompositionBar";
 import type { FileNode } from "@/types";
 
 interface TreeMapTooltipProps {
@@ -25,6 +27,7 @@ export const TreeMapTooltip: React.FC<TreeMapTooltipProps> = ({
 }) => {
   const innerRef = useRef<HTMLDivElement>(null);
   const [dims, setDims] = useState({ w: 0, h: 0 });
+  const { resolvedFlavor } = useThemeSettings();
 
   // Re-measure whenever content changes (new file hovered)
   useLayoutEffect(() => {
@@ -36,7 +39,12 @@ export const TreeMapTooltip: React.FC<TreeMapTooltipProps> = ({
   if (!visible || !data) return null;
 
   const isDir = data.originalNode.type === "directory";
-  const modified = data.originalNode.lastModified;
+  const median = data.originalNode.medianMtime ?? 0;
+  const slices = compositionSlices(
+    data.originalNode.fileTypes,
+    data.originalNode.fileTypesOther,
+    VIZ_SUN_COLORS[resolvedFlavor],
+  );
 
   const flipX = dims.w > 0 && x + OFFSET_X + dims.w + EDGE_PADDING > window.innerWidth;
   const flipY = dims.h > 0 && y + OFFSET_Y + dims.h + EDGE_PADDING > window.innerHeight;
@@ -63,9 +71,13 @@ export const TreeMapTooltip: React.FC<TreeMapTooltipProps> = ({
           <div>
             {formatFileSize(data.size)} · {formatPercentage(data.size, parentSize)} of parent
           </div>
-          {modified ? (
-            <div>Modified {new Date(modified * 1000).toLocaleDateString()}</div>
+          {slices.length > 0 ? (
+            <div className="space-y-0.5">
+              <TypeCompositionBar slices={slices} className="w-full" />
+              <div>{topTypesText(slices, 2)}</div>
+            </div>
           ) : null}
+          {median ? <div>Median age {formatAge(median)}</div> : null}
         </div>
       </div>
     </div>

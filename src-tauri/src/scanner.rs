@@ -7,6 +7,8 @@
 //! pulls the bounded slice it is currently rendering (see `commands::get_subtree`).
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Instant, UNIX_EPOCH};
 
 use jwalk::WalkDirGeneric;
@@ -127,7 +129,14 @@ pub struct Progress {
 
 /// Scan `root` in parallel. `on_progress` is invoked periodically (throttled by
 /// the caller's appetite — we call it at most every ~80ms / 4k entries).
-pub fn scan<F: FnMut(Progress)>(root: PathBuf, mut on_progress: F) -> std::io::Result<ScanTree> {
+///
+/// `cancel` is polled both on the worker threads (to stop descending) and on the
+/// consuming thread; when set, the scan aborts early with `ErrorKind::Interrupted`.
+pub fn scan<F: FnMut(Progress)>(
+    root: PathBuf,
+    cancel: Arc<AtomicBool>,
+    mut on_progress: F,
+) -> std::io::Result<ScanTree> {
     let start = Instant::now();
 
     // Denominator for a genuine progress bar: bytes already used on the volume
@@ -152,11 +161,18 @@ pub fn scan<F: FnMut(Progress)>(root: PathBuf, mut on_progress: F) -> std::io::R
     #[cfg(unix)]
     let visited: dashmap::DashSet<(u64, u64)> = dashmap::DashSet::new();
 
+    let cancel_walk = cancel.clone();
     let walk = WalkDirGeneric::<((), EntryMeta)>::new(&root)
         .skip_hidden(false)
         .follow_links(false)
         .parallelism(jwalk::Parallelism::RayonNewPool(threads))
         .process_read_dir(move |_depth, _path, _read_dir_state, children| {
+            // Cancelled mid-scan: drop this directory's children so jwalk stops
+            // descending. The consumer loop below also bails on the same flag.
+            if cancel_walk.load(Ordering::Relaxed) {
+                children.clear();
+                return;
+            }
             // Runs on the rayon worker handling this directory, so the stat()
             // calls parallelize across directories — the core speed win.
             for entry in children.iter_mut().flatten() {
@@ -219,6 +235,12 @@ pub fn scan<F: FnMut(Progress)>(root: PathBuf, mut on_progress: F) -> std::io::R
     let mut root_idx: Option<u32> = None;
 
     for entry in walk {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "scan cancelled",
+            ));
+        }
         let entry = match entry {
             Ok(e) => e,
             Err(_) => continue,
@@ -382,7 +404,8 @@ mod tests {
         fs::write(root.join("sub/c.bin"), vec![0u8; 300]).unwrap();
         fs::write(root.join("sub/deep/d.bin"), vec![0u8; 400]).unwrap();
 
-        let tree = scan(root.clone(), |_| {}).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let tree = scan(root.clone(), cancel, |_| {}).unwrap();
 
         // Counts are exact; byte totals use allocated blocks, so we assert
         // consistency and ordering rather than an exact byte count (block size

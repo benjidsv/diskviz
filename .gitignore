@@ -24,4 +24,4 @@ dist-ssr
 *.sw?
 
 .claude
-CLAUDE.md
+.vscode

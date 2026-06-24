@@ -23,3 +23,37 @@ export function formatPercentage(value: number, total: number): string {
   if (!total) return "0.0%";
   return `${((value / total) * 100).toFixed(1)}%`;
 }
+
+const SECS_PER_DAY = 86_400;
+
+/** Coarse "how long ago" label for a unix-seconds timestamp (vs now). */
+export function formatAge(unixSeconds: number): string {
+  if (!unixSeconds) return "—";
+  const days = Math.max(0, (Date.now() / 1000 - unixSeconds) / SECS_PER_DAY);
+  if (days < 1) return "today";
+  if (days < 30) return `${Math.round(days)}d`;
+  if (days < 365) return `${Math.round(days / 30)}mo`;
+  const years = Math.floor(days / 365);
+  const months = Math.round((days % 365) / 30);
+  return months > 0 ? `${years}y ${months}mo` : `${years}y`;
+}
+
+export type ActivenessLabel = "Active" | "Recent" | "Stale" | "Dormant";
+
+/**
+ * Normalize a node's median age to a 0..1 "staleness" score against the
+ * configured threshold (in days), plus a coarse category label.
+ */
+export function activeness(
+  unixSeconds: number,
+  thresholdDays: number,
+): { score: number; label: ActivenessLabel } {
+  if (!unixSeconds || thresholdDays <= 0) {
+    return { score: 0, label: "Active" };
+  }
+  const days = Math.max(0, (Date.now() / 1000 - unixSeconds) / SECS_PER_DAY);
+  const score = Math.min(1, days / thresholdDays);
+  const label: ActivenessLabel =
+    score < 0.1 ? "Active" : score < 0.4 ? "Recent" : score < 0.8 ? "Stale" : "Dormant";
+  return { score, label };
+}

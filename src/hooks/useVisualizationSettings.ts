@@ -1,13 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 
 export type VisualizationType = "treemap" | "sunburst";
+export type ColorMode = "size" | "activeness";
 
 interface VisualizationSettings {
   type: VisualizationType;
+  /** What drives tile/arc color: file size, or file age (activeness). */
+  colorMode: ColorMode;
+  /** Age (days) at which a folder is considered fully "old" in activeness mode. */
+  ageThresholdDays: number;
 }
 
 const DEFAULT_SETTINGS: VisualizationSettings = {
   type: "treemap",
+  colorMode: "size",
+  ageThresholdDays: 730,
 };
 
 const STORAGE_KEY = "diskviz-visualization-settings";
@@ -19,10 +26,18 @@ export function useVisualizationSettings() {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
-        const parsed = JSON.parse(stored) as VisualizationSettings;
-        if (parsed.type === "treemap" || parsed.type === "sunburst") {
-          setSettings(parsed);
-        }
+        const parsed = JSON.parse(stored) as Partial<VisualizationSettings>;
+        setSettings((prev) => ({
+          type: parsed.type === "treemap" || parsed.type === "sunburst" ? parsed.type : prev.type,
+          colorMode:
+            parsed.colorMode === "size" || parsed.colorMode === "activeness"
+              ? parsed.colorMode
+              : prev.colorMode,
+          ageThresholdDays:
+            typeof parsed.ageThresholdDays === "number" && parsed.ageThresholdDays > 0
+              ? parsed.ageThresholdDays
+              : prev.ageThresholdDays,
+        }));
       }
     } catch (error) {
       console.warn("Failed to load visualization settings:", error);
@@ -46,9 +61,23 @@ export function useVisualizationSettings() {
     [updateSettings],
   );
 
+  const setColorMode = useCallback(
+    (colorMode: ColorMode) => updateSettings({ colorMode }),
+    [updateSettings],
+  );
+
+  const setAgeThresholdDays = useCallback(
+    (ageThresholdDays: number) => updateSettings({ ageThresholdDays }),
+    [updateSettings],
+  );
+
   return {
     settings,
     setVisualizationType,
+    setColorMode,
+    setAgeThresholdDays,
     visualizationType: settings.type,
+    colorMode: settings.colorMode,
+    ageThresholdDays: settings.ageThresholdDays,
   };
 }

@@ -9,7 +9,9 @@ Tauri v2 + React 19 + Rust disk usage visualizer. Scanner uses `jwalk` on the Ru
 - **Styling:** Tailwind v4 (`@tailwindcss/vite`), CSS custom properties for theming, no `dark:` classes
 - **UI primitives:** Radix UI wrapped in shadcn-style components under `src/components/ui/`
 - **Class merging:** `clsx` + `tailwind-merge` via `src/lib/utils.ts`
-- **Charts:** `recharts` (treemap), hand-rolled SVG (sunburst)
+- **Charts:** `recharts` (treemap), hand-rolled SVG (sunburst, file-type donut)
+
+See [`docs/theming.md`](docs/theming.md) for the color system, Catppuccin palette, and picker details.
 
 ## Dev
 
@@ -19,81 +21,74 @@ npm run tauri dev  # full Tauri app
 npm run build      # tsc + vite build
 ```
 
-## Theming
-
-**Catppuccin** palette: 4 flavors (Latte/light, Frappé/Macchiato/Mocha/dark), 14 accent colors.
-
-- Flavor applied by toggling a `theme-<flavor>` class on `<html>` — no Tailwind `dark:` classes anywhere
-- All semantic tokens (`--background`, `--foreground`, `--primary`, etc.) are CSS vars defined per `.theme-*` block in `src/index.css`
-- Tailwind v4 `@theme inline` block maps `--color-*` utilities to those vars
-- Accent overrides `--primary`, `--primary-foreground`, `--ring`, `--viz-ramp-5` inline on `html` via `applyAccentOverride()` in `useThemeSettings.ts`
-- `--primary-foreground` is computed via WCAG luminance (`readableInk()` in `src/lib/colorScale.ts`) — **not a hardcoded table**
-
 ## Key source files
 
 ```
 src/
-  App.tsx                          # root: path input, scan, breadcrumbs, footer controls
-  index.css                        # all theme variable blocks + viz ramp/sun tokens
+  App.tsx                          # root: scan, selection, error/cancel/empty states, forward/back stack, macOS menu events, drag-drop, swipe gestures, footer (settings)
+  index.css                        # theme variable blocks + viz ramp/sun tokens; --radius scale; .readout / .micro-label utilities
+  types.ts                         # shared types: FileNode (+ hiddenChildren/hiddenSize, fileTypes/fileTypesOther, medianMtime), FileTypeStat, ScanSummary, ScanProgress
   lib/
     colorScale.ts                  # hexToRgb, interpolateStops, readableInk, relativeLuminance
-    api.ts                         # Tauri invoke wrappers
+    api.ts                         # Tauri invoke wrappers (incl. cancelScan; getSubtree takes maxDepth/maxChildren/offset)
     utils.ts                       # cn() helper
+  utils/
+    formatters.ts                  # formatFileSize, formatDuration, formatNumber, formatPercentage, formatAge, activeness (age→score+label)
   hooks/
-    useThemeSettings.ts            # theme/accent state; ACCENT_COLORS, VIZ_RAMP_BASE, VIZ_SUN_COLORS tables
-    useTreeMapData.ts              # transforms FileNode → treemap data + maxSize/minSize/totalSize
-    useTreeMapInteraction.ts       # hover/tooltip/context-menu state for treemap
-    useVisualizationSettings.ts    # persists treemap vs sunburst choice
+    useThemeSettings.ts            # theme/accent state; ACCENT_COLORS, VIZ_RAMP_BASE, VIZ_SUN_COLORS, VIZ_AGE_BASE tables; ageRampStops
+    useTreeMapData.ts              # FileNode → treemap data (+ synthetic "Other" tile from hiddenChildren/hiddenSize); OTHER_NODE_ID, isOtherNode
+    useTreeMapInteraction.ts       # hover/tooltip state for treemap
+    useVisualizationSettings.ts    # persists view (treemap/sunburst), colorMode (size/activeness), ageThresholdDays
+    useNativeContextMenu.ts        # native macOS context menus (showNodeContextMenu, showBreadcrumbContextMenu)
   components/
+    TopBar.tsx                     # HUD: brand · back/forward · breadcrumb trail · live stats · Open
+    ErrorState.tsx                 # full-area scan/navigation error with Retry/Dismiss
     AccentPicker.tsx               # swatch popover (14 color dots)
     ThemePicker.tsx                # flavor picker (Radix Popover)
-    ScanProgress.tsx               # scan-in-progress panel
+    ScanProgress.tsx               # scan-in-progress panel (progressbar ARIA + Cancel)
+    NoticesModal.tsx               # open-source notices modal
     charts/
-      TreeMapChart.tsx             # recharts Treemap + continuous color gradient
-      SunburstChart.tsx            # hand-rolled SVG sunburst
+      TreeMapChart.tsx             # recharts Treemap + continuous color gradient (size or activeness); single-click select/toggle
+      SunburstChart.tsx            # hand-rolled SVG sunburst (size or activeness); single-click select; keyboard a11y
       TreeMapTooltip.tsx           # floating tooltip
-      TreeMapContextMenu.tsx       # right-click menu
-      DeleteConfirmDialog.tsx      # confirm trash dialog
+      DetailReadout.tsx            # selected/current node readout (viz footer strip): size, %, file/folder counts, composition popover, median-age tag
+      ColorScaleLegend.tsx         # color legend; size→color gradient (treemap) or activeness fresh→old ramp
+      TypeCompositionBar.tsx       # compact stacked bar of file-type mix; compositionSlices() + topTypesText() helpers
+      TypeCompositionDonut.tsx     # donut + legend of file-type mix (composition popover content)
+      vizColor.ts                  # sizeColorRgb / activenessColorRgb / neutralRgb — node → fill for both color modes
+      DeleteConfirmDialog.tsx      # confirm trash dialog (with item counts)
     ui/
       button.tsx, input.tsx        # shadcn-style primitives
+      dot.tsx                      # middot separator for HUD/footer
       toggle-group.tsx             # view switcher (treemap/sunburst)
-      context-menu.tsx             # Radix ContextMenu wrapper
       alert-dialog.tsx             # Radix AlertDialog wrapper
       popover.tsx                  # Radix Popover wrapper
       separator.tsx
 ```
 
-## Treemap coloring
+## Shell
 
-Continuous perceptual heatmap — **no buckets**. Each cell gets a unique shade.
+- **TopBar** (`TopBar.tsx`) is the location/stats HUD; it owns the single breadcrumb trail and back/forward buttons. The breadcrumb is the only path display (no duplicate raw path). Root crumb is accented; the `/` volume root suppresses its trailing separator to avoid `//`.
+- **Footer** holds settings only (accent, theme, view toggle, color-mode toggle + age-threshold control, shortcuts, notices). Live stats live in the TopBar, not the footer.
+- Directory selection is one step: Browse / `⌘O` / drag-drop a folder onto the window all scan immediately (no separate input row or Analyze button).
 
-- `VIZ_RAMP_BASE[flavor]` in `useThemeSettings.ts`: 4 static hex stops per flavor (Surface0 → Surface2 → Lavender → Sapphire)
-- 5th stop = current accent color (`accentColor` from `useThemeSettings`)
-- App.tsx computes `rampStops = [...VIZ_RAMP_BASE[resolvedFlavor], accentColor]` and passes to `<TreeMapChart>`
-- In `TreeMapChart`: `t = (log(size+1) - log(min+1)) / (log(max+1) - log(min+1))` → `interpolateStops(rampStops, t)` → RGB fill
-- Label color computed with `readableInk(cellRgb)` — adapts to light/dark tiles automatically
-- CSS vars `--viz-ramp-1..5` in `index.css` match the JS table (used as fallback / for any direct CSS reference)
+## Color modes & subtree stats
 
-## Sunburst coloring
-
-- Arc fills: `var(--viz-sun-0..6)` cycling by depth level — static per flavor, NOT affected by accent
-- `VIZ_SUN_COLORS[flavor]` in `useThemeSettings.ts`: 7 hex stops per flavor (matches `index.css`)
-- Arc label ink: `readableInk(hexToRgb(VIZ_SUN_COLORS[resolvedFlavor][level % 7]))` — computed in `SunburstChart` via `useThemeSettings()`
-
-## Pickers (footer)
-
-Both replaced from native `<select>` to Radix Popover components:
-- `AccentPicker`: trigger = current-color dot + name, opens 14-swatch grid, `side="top"`
-- `ThemePicker`: trigger = current flavor name + chevron, opens 5-item list with checkmark, `side="top"`
+- **Two color modes** (`useVisualizationSettings`, persisted): `size` colors tiles/arcs by log-normalized size along the accent ramp (`VIZ_RAMP_BASE`); `activeness` colors by median file age (fresh→old, green→red) along `VIZ_AGE_BASE`, scaled by `ageThresholdDays` (default 730). `vizColor.ts` maps a node to a fill in either mode; nodes without age data (synthetic "Other", empty folders) fall back to a neutral tone.
+- **Subtree stats are computed in Rust** (`commands.rs` `subtree_stats`) per `get_subtree` call, not in the frontend: top-8 file extensions by size + a summed `fileTypesOther` remainder, and a bucketed-median mtime (`medianMtime`) from a coarse age histogram. Surfaced in `DetailReadout` (composition popover + age tag).
+- **Adaptive "Other" bucket** (`commands.rs` `adaptive_visible_count`): shows the smallest N children (min 12, max `maxChildren`) such that the hidden remainder never exceeds the smallest shown tile, so "Other" is never the biggest tile. The "Other" tile stays drillable via `getSubtree(..., offset)` pagination.
+- **Scan cancel:** `cancelScan()` flips an `AtomicBool` in `AppState.cancel`, polled inside the scan to abort early and reject the in-flight `scan_directory`.
 
 ## Accessibility state
 
-- Treemap tiles: `role="button" tabIndex={0}` + `onKeyDown` (Enter/Space → click). Focus ring via CSS: `g[role="button"]:focus-visible rect { stroke: var(--ring) !important; }` in `index.css`
+- Treemap tiles: `role="button" tabIndex={0}` + `onKeyDown` (Enter/Space → select). Focus ring via CSS: `g[role="button"]:focus-visible rect { stroke: var(--ring) !important; }` in `index.css`
+- Sunburst arcs: `role="button" tabIndex={0}` + `onKeyDown` (Enter/Space → select). Focus ring via CSS: `path[role="button"]:focus-visible { stroke: var(--ring) !important; }` in `index.css`
 - Shortcuts modal: `role="dialog" aria-modal="true" aria-labelledby="shortcuts-title"`, autofocuses close button on open, window-level Escape handler
-- Sunburst paths already had `role="button"` + keyboard handler
+- Scan progress bar: `role="progressbar"` with `aria-valuenow/min/max`
 
 ## Known non-issues (intentional)
 
 - `bg-black/50` scrims on modals — intentionally dark regardless of theme
 - `* { border-color: var(--border) }` global rule — harmless, pre-existing
 - `CustomContent` defined inside `TreeMapChart` (causes remounts on each render) — pre-existing recharts pattern, not worth fixing without broader refactor
+- `TreeMapContextMenu.tsx` + `ui/context-menu.tsx` — dead code left in place; right-click is now native macOS via `useNativeContextMenu.ts`

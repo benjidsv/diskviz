@@ -23,6 +23,14 @@
 
   --font-sans: "Geist Variable", system-ui, -apple-system, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+
+  /* Instrument-tight corner radius. One token drives the whole scale so
+     buttons, cards, popovers and dialogs round consistently. */
+  --radius: 0.25rem;
+  --radius-sm: 0.1875rem;
+  --radius-md: 0.25rem;
+  --radius-lg: 0.375rem;
+  --radius-xl: 0.5rem;
 }
 
 /* ─── Catppuccin Latte (light) ─────────────────────────────────────────── */
@@ -260,6 +268,24 @@
   border-color: var(--border);
 }
 
+/* ─── Instrument type voice ────────────────────────────────────────────── */
+/* Mono, tabular numerics for any data readout (sizes, counts, durations). */
+.readout {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* Uppercase, letter-spaced micro-labels for section headers (SELECTED, SIZE).
+   Colour is left to the call site so it can pair with text-muted-foreground
+   etc. without specificity fights against Tailwind utilities. */
+.micro-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+  line-height: 1;
+}
+
 /* SVG treemap tile focus ring — outline isn't supported on SVG elements in WebKit */
 g[role="button"]:focus-visible rect {
   stroke: var(--ring) !important;
@@ -269,6 +295,12 @@ g[role="button"]:focus-visible rect {
 /* SVG treemap tile hover — subtle brightness lift to match sunburst */
 g[role="button"]:hover rect {
   filter: brightness(1.1);
+}
+
+/* SVG sunburst arc focus ring — outline isn't supported on SVG in WebKit */
+path[role="button"]:focus-visible {
+  stroke: var(--ring) !important;
+  stroke-width: 2.5 !important;
 }
 
 html,
