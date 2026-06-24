@@ -12,6 +12,17 @@ the [Catppuccin](https://github.com/catppuccin/catppuccin) palette (MIT).
 > Scans ~3.6M nodes / 259 GB in about **26 seconds**, collecting full size,
 > inode, and mtime metadata per entry in parallel.
 
+## Screenshots
+
+### Treemap visual
+<img width="1312" height="932" alt="Screenshot 2026-06-24 at 03 17 03" src="https://github.com/user-attachments/assets/e5ddafa1-d49c-4f79-9e1e-7b5cb2204040" />
+
+### Sunburst visual with staleness coloring
+<img width="1312" height="932" alt="Screenshot 2026-06-24 at 03 18 30" src="https://github.com/user-attachments/assets/dee92297-5588-47b3-a852-7b65bc7dd850" />
+
+### Folder composition
+<img width="354" height="226" alt="Screenshot 2026-06-24 at 03 17 48" src="https://github.com/user-attachments/assets/e22543be-9683-4200-85bc-bab2fd3da0c2" />
+
 ## Features
 
 - **Two visualizations** — TreeMap and Sunburst, toggle between them live.
