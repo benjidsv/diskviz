@@ -40,6 +40,12 @@ export const TreeMapTooltip: React.FC<TreeMapTooltipProps> = ({
 
   const isDir = data.originalNode.type === "directory";
   const modified = data.originalNode.lastModified;
+  const median = data.originalNode.medianMtime ?? 0;
+  const slices = compositionSlices(
+    data.originalNode.fileTypes,
+    data.originalNode.fileTypesOther,
+    VIZ_SUN_COLORS[resolvedFlavor],
+  );
 
   const flipX = dims.w > 0 && x + OFFSET_X + dims.w + EDGE_PADDING > window.innerWidth;
   const flipY = dims.h > 0 && y + OFFSET_Y + dims.h + EDGE_PADDING > window.innerHeight;
@@ -66,6 +72,13 @@ export const TreeMapTooltip: React.FC<TreeMapTooltipProps> = ({
           <div>
             {formatFileSize(data.size)} · {formatPercentage(data.size, parentSize)} of parent
           </div>
+          {slices.length > 0 ? (
+            <div className="flex items-center gap-1.5">
+              <TypeCompositionBar slices={slices} className="w-16" />
+              <span>{topTypesText(slices, 2)}</span>
+            </div>
+          ) : null}
+          {median ? <div>Median age {formatAge(median)}</div> : null}
           {modified ? (
             <div>Modified {new Date(modified * 1000).toLocaleDateString()}</div>
           ) : null}

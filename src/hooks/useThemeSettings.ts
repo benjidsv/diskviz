@@ -63,6 +63,17 @@ export const VIZ_RAMP_BASE: Record<ThemeFlavor, readonly [string, string, string
 };
 
 /**
+ * Activeness ramp per flavor: fresh → old as green → yellow → peach → red.
+ * Used by the "color by activeness" mode; independent of the accent/size ramp.
+ */
+export const VIZ_AGE_BASE: Record<ThemeFlavor, readonly string[]> = {
+  latte:     ["#40a02b", "#df8e1d", "#fe640b", "#d20f39"],
+  frappe:    ["#a6d189", "#e5c890", "#ef9f76", "#e78284"],
+  macchiato: ["#a6da95", "#eed49f", "#f5a97f", "#ed8796"],
+  mocha:     ["#a6e3a1", "#f9e2af", "#fab387", "#f38ba8"],
+};
+
+/**
  * Sunburst level colors per flavor (7 stops cycling by depth level).
  * These are static — they do NOT change with accent.
  */
@@ -154,5 +165,10 @@ export function useThemeSettings() {
     [resolvedFlavor, accent],
   );
 
-  return { theme: setting, setTheme, accent, setAccent, resolvedFlavor, accentColor };
+  const ageRampStops = useMemo(
+    () => [...VIZ_AGE_BASE[resolvedFlavor]],
+    [resolvedFlavor],
+  );
+
+  return { theme: setting, setTheme, accent, setAccent, resolvedFlavor, accentColor, ageRampStops };
 }

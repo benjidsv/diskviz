@@ -1,8 +1,10 @@
 import type React from "react";
 import { useCallback, useMemo, useState } from "react";
 import { formatFileSize } from "@/utils/formatters";
-import { hexToRgb, readableInk } from "@/lib/colorScale";
+import { hexToRgb, readableInk, rgbToCss } from "@/lib/colorScale";
 import { useThemeSettings, VIZ_SUN_COLORS } from "@/hooks/useThemeSettings";
+import { activenessColorRgb } from "./vizColor";
+import type { ColorMode } from "@/hooks/useVisualizationSettings";
 import type { FileNode } from "@/types";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import { TreeMapTooltip } from "./TreeMapTooltip";
@@ -10,6 +12,9 @@ import { showNodeContextMenu } from "@/hooks/useNativeContextMenu";
 
 interface SunburstChartProps {
   data: FileNode;
+  colorMode: ColorMode;
+  ageRampStops: string[];
+  ageThresholdDays: number;
   selectedId?: string;
   onNodeSelect?: (node: FileNode) => void;
   onNodeDoubleClick?: (node: FileNode) => void;
@@ -27,6 +32,9 @@ interface SunburstNode {
 
 const SunburstChart: React.FC<SunburstChartProps> = ({
   data,
+  colorMode,
+  ageRampStops,
+  ageThresholdDays,
   selectedId,
   onNodeSelect,
   onNodeDoubleClick,
@@ -220,7 +228,12 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
             if (endAngle - startAngle < 1) return null;
 
             const arcPath = createArcPath(startAngle, endAngle, innerRadius, outerRadius);
-            const color = getColor(node.size, maxSize, level);
+            const ageRgb =
+              colorMode === "activeness"
+                ? activenessColorRgb(node.medianMtime, ageRampStops, ageThresholdDays)
+                : null;
+            const color = ageRgb ? rgbToCss(ageRgb) : getColor(node.size, maxSize, level);
+            const inkColor = ageRgb ? readableInk(ageRgb) : arcInkColors[level % 7];
 
             const midAngle = (startAngle + endAngle) / 2;
             const midAngleRad = (midAngle - 90) * (Math.PI / 180);
@@ -282,7 +295,7 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
                     y={textY}
                     textAnchor="middle"
                     dominantBaseline="middle"
-                    fill={arcInkColors[level % 7]}
+                    fill={inkColor}
                     fontSize={fontSize}
                     fontWeight="600"
                     className="pointer-events-none select-none"

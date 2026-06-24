@@ -4,7 +4,9 @@ import { ResponsiveContainer, Treemap } from "recharts";
 import { isOtherNode, useTreeMapData } from "@/hooks/useTreeMapData";
 import { useTreeMapInteraction } from "@/hooks/useTreeMapInteraction";
 import { formatFileSize } from "@/utils/formatters";
-import { interpolateStops, readableInk, rgbToCss } from "@/lib/colorScale";
+import { readableInk, rgbToCss } from "@/lib/colorScale";
+import { activenessColorRgb, neutralRgb, sizeColorRgb } from "./vizColor";
+import type { ColorMode } from "@/hooks/useVisualizationSettings";
 import type { FileNode } from "@/types";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import { TreeMapTooltip } from "./TreeMapTooltip";
@@ -13,6 +15,9 @@ import { showNodeContextMenu } from "@/hooks/useNativeContextMenu";
 interface TreeMapChartProps {
   data: FileNode;
   rampStops: string[];
+  colorMode: ColorMode;
+  ageRampStops: string[];
+  ageThresholdDays: number;
   selectedId?: string;
   onNodeSelect?: (node: FileNode) => void;
   onNodeDoubleClick?: (node: FileNode) => void;
@@ -22,6 +27,9 @@ interface TreeMapChartProps {
 const TreeMapChart: React.FC<TreeMapChartProps> = ({
   data,
   rampStops,
+  colorMode,
+  ageRampStops,
+  ageThresholdDays,
   selectedId,
   onNodeSelect,
   onNodeDoubleClick,
@@ -95,16 +103,15 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
     );
     const shouldShowText = adjustedWidth > 30 && adjustedHeight > 20;
 
-    // Continuous size → color mapping using log-normalized t in [0,1]
-    const logMin = Math.log(minSize + 1);
-    const logMax = Math.log(maxSize + 1);
-    const t = logMax > logMin
-      ? (Math.log(size + 1) - logMin) / (logMax - logMin)
-      : 1;
-    const cellRgb = interpolateStops(rampStops, Math.max(0, Math.min(1, t)));
+    const isOther = isOtherNode(originalNode);
+    const cellRgb =
+      colorMode === "activeness"
+        ? (!isOther &&
+            activenessColorRgb(originalNode.medianMtime, ageRampStops, ageThresholdDays)) ||
+          neutralRgb(rampStops)
+        : sizeColorRgb(size, minSize, maxSize, rampStops);
     const fillCss = rgbToCss(cellRgb);
     const inkColor = readableInk(cellRgb);
-    const isOther = isOtherNode(originalNode);
     const isSelected = !!selectedId && originalNode.id === selectedId;
 
     const handleClick = (e: React.MouseEvent) => {
