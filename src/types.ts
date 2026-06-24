@@ -21,6 +21,18 @@ export interface FileNode {
   lastModified?: number;
   isHidden?: boolean;
   permissions?: string;
+  /** Top extensions in this subtree by size (largest first, ≤5). */
+  fileTypes?: FileTypeStat[];
+  /** Summed size of all extensions beyond the top 5 — the "Other" slice. */
+  fileTypesOther?: number;
+  /** Bucketed median mtime of file descendants (unix seconds). 0 = no files. */
+  medianMtime?: number;
+}
+
+export interface FileTypeStat {
+  /** Lowercased extension without the dot; empty for extensionless files. */
+  ext: string;
+  size: number;
 }
 
 export interface ScanSummary {

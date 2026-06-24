@@ -1,7 +1,9 @@
 import type React from "react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { FileIcon, FolderIcon } from "lucide-react";
-import { formatFileSize, formatPercentage } from "@/utils/formatters";
+import { formatAge, formatFileSize, formatPercentage } from "@/utils/formatters";
+import { useThemeSettings, VIZ_SUN_COLORS } from "@/hooks/useThemeSettings";
+import { compositionSlices, topTypesText, TypeCompositionBar } from "./TypeCompositionBar";
 import type { FileNode } from "@/types";
 
 interface TreeMapTooltipProps {
@@ -25,6 +27,7 @@ export const TreeMapTooltip: React.FC<TreeMapTooltipProps> = ({
 }) => {
   const innerRef = useRef<HTMLDivElement>(null);
   const [dims, setDims] = useState({ w: 0, h: 0 });
+  const { resolvedFlavor } = useThemeSettings();
 
   // Re-measure whenever content changes (new file hovered)
   useLayoutEffect(() => {
