@@ -14,15 +14,16 @@ export const OTHER_NODE_ID = "__other__";
 export const isOtherNode = (node: FileNode | null | undefined): boolean =>
   node?.id === OTHER_NODE_ID;
 
-export const useTreeMapData = (node: FileNode | null, maxItems = 20) => {
+export const useTreeMapData = (node: FileNode | null) => {
   const data = useMemo<TreeMapData[]>(() => {
     if (!node || !node.children || node.children.length === 0) {
       return [];
     }
+    // The backend already chose which children to show (adaptive cap) and
+    // reports the rest via hiddenChildren/hiddenSize — render them all as-is.
     const shown: TreeMapData[] = node.children
       .filter((child) => child.size > 0)
       .sort((a, b) => b.size - a.size)
-      .slice(0, maxItems)
       .map((child) => ({
         name: child.name,
         size: child.size,
@@ -52,7 +53,7 @@ export const useTreeMapData = (node: FileNode | null, maxItems = 20) => {
     }
 
     return shown;
-  }, [node, maxItems]);
+  }, [node]);
 
   const maxSize = useMemo(() => {
     if (data.length === 0) return 0;

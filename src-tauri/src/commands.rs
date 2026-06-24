@@ -89,6 +89,36 @@ fn display_name(tree: &ScanTree, idx: u32) -> String {
     }
 }
 
+/// Never roll a folder this small into the "Other" bucket — show all of it.
+const MIN_SHOWN: usize = 12;
+
+/// How many of a node's (size-sorted) children to show before the rest collapse
+/// into "Other". Returns the smallest N in `[MIN_SHOWN, max]` over the suffix
+/// `children[offset..]` such that the hidden remainder is no larger than the
+/// smallest shown child — so "Other" can never be the biggest tile. Falls back
+/// to the ceiling when the tail never decays enough (e.g. thousands of equal
+/// files), where a large "Other" is genuine and stays drillable via `offset`.
+fn adaptive_visible_count(tree: &ScanTree, children: &[u32], offset: usize, max: usize) -> usize {
+    let rem = &children[offset.min(children.len())..];
+    let l = rem.len();
+    if l <= MIN_SHOWN {
+        return l;
+    }
+    let sizes: Vec<u64> = rem.iter().map(|&c| tree.nodes[c as usize].size).collect();
+    let total: u64 = sizes.iter().sum();
+    let upper = l.min(max);
+    let mut shown_sum: u64 = sizes[..MIN_SHOWN].iter().sum();
+    let mut n = MIN_SHOWN;
+    loop {
+        let hidden = total - shown_sum;
+        if hidden <= sizes[n - 1] || n >= upper {
+            return n;
+        }
+        shown_sum += sizes[n];
+        n += 1;
+    }
+}
+
 fn build_dto(
     tree: &ScanTree,
     idx: u32,
@@ -101,7 +131,9 @@ fn build_dto(
     if node.is_dir && depth_left > 0 {
         // `offset` paginates this node's (size-sorted) children so the UI can
         // drill into the "Other" bucket. Nested levels always start at 0.
-        for &c in node.children.iter().skip(offset).take(max_children) {
+        // `max_children` is the hard ceiling; the shown count adapts below it.
+        let visible = adaptive_visible_count(tree, &node.children, offset, max_children);
+        for &c in node.children.iter().skip(offset).take(visible) {
             children.push(build_dto(tree, c, depth_left - 1, max_children, 0));
         }
     }
@@ -209,7 +241,7 @@ pub fn get_subtree(
         tree,
         idx,
         max_depth.unwrap_or(3),
-        max_children.unwrap_or(20),
+        max_children.unwrap_or(100),
         offset.unwrap_or(0),
     ))
 }

@@ -115,7 +115,7 @@ function App() {
   // current batch); we tag it as synthetic so navigation can re-page it and the
   // breadcrumb can show it as "Other" without colliding with the real node id.
   const loadView = useCallback(async (baseId: string, offset: number): Promise<FileNode> => {
-    const fresh = await getSubtree(baseId, 3, 20, offset);
+    const fresh = await getSubtree(baseId, 3, 100, offset);
     if (offset <= 0) return fresh;
     return {
       ...fresh,
