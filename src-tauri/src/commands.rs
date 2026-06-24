@@ -2,9 +2,11 @@
 //! frontend pulls only the bounded slice it renders via `get_subtree`, so IPC
 //! payloads stay tiny regardless of how many millions of files were scanned.
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -40,6 +42,21 @@ pub struct FileNodeDto {
     pub last_modified: i64,
     pub is_hidden: bool,
     pub permissions: String,
+    /// Top extensions in this subtree by size (largest first, ≤5 entries).
+    pub file_types: Vec<FileTypeStat>,
+    /// Summed size of every extension beyond the top 5 — the "Other" slice.
+    pub file_types_other: u64,
+    /// Bucketed median mtime of file descendants (unix seconds). 0 = no files.
+    pub median_mtime: i64,
+}
+
+/// One slice of a node's file-type composition.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTypeStat {
+    /// Lowercased extension without the dot; empty for extensionless files.
+    pub ext: String,
+    pub size: u64,
 }
 
 #[derive(Serialize)]
@@ -119,6 +136,83 @@ fn adaptive_visible_count(tree: &ScanTree, children: &[u32], offset: usize, max:
     }
 }
 
+/// Lowercased extension (no dot) for a file name; empty if it has none.
+fn extension_of(name: &str) -> String {
+    Path::new(name)
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default()
+}
+
+/// Upper bounds (exclusive, in days) of each age bucket; the last bucket is
+/// open-ended. Coarse on purpose — the median is a rough "is this stale?" signal.
+const AGE_BUCKET_DAYS: [i64; 8] = [1, 7, 30, 90, 180, 365, 730, 1825];
+/// Representative age (days) reported for a file landing in each bucket.
+const AGE_BUCKET_REP_DAYS: [i64; 9] = [0, 3, 18, 60, 135, 270, 545, 1277, 2555];
+const SECS_PER_DAY: i64 = 86_400;
+
+fn age_bucket(age_days: i64) -> usize {
+    AGE_BUCKET_DAYS
+        .iter()
+        .position(|&b| age_days < b)
+        .unwrap_or(AGE_BUCKET_DAYS.len())
+}
+
+/// Walk the subtree rooted at `idx` and summarise its file descendants:
+/// top-5 extensions by size (+ the summed remainder), and a bucketed-median
+/// mtime. Directory mtimes are ignored. Iterative to avoid deep recursion.
+fn subtree_stats(tree: &ScanTree, idx: u32) -> (Vec<FileTypeStat>, u64, i64) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let mut ext_sizes: HashMap<String, u64> = HashMap::new();
+    let mut age_hist = [0u64; 9];
+    let mut file_count: u64 = 0;
+
+    let mut stack: Vec<u32> = vec![idx];
+    while let Some(cur) = stack.pop() {
+        let node = &tree.nodes[cur as usize];
+        if node.is_dir {
+            stack.extend_from_slice(&node.children);
+            continue;
+        }
+        // File: tally its extension bytes and age bucket.
+        *ext_sizes.entry(extension_of(&node.name)).or_insert(0) += node.size;
+        let age_days = ((now - node.mtime).max(0)) / SECS_PER_DAY;
+        age_hist[age_bucket(age_days)] += 1;
+        file_count += 1;
+    }
+
+    let mut sorted: Vec<FileTypeStat> = ext_sizes
+        .into_iter()
+        .map(|(ext, size)| FileTypeStat { ext, size })
+        .collect();
+    sorted.sort_unstable_by(|a, b| b.size.cmp(&a.size).then_with(|| a.ext.cmp(&b.ext)));
+
+    let other: u64 = sorted.iter().skip(5).map(|s| s.size).sum();
+    sorted.truncate(5);
+
+    let median_mtime = if file_count == 0 {
+        0
+    } else {
+        let target = (file_count + 1) / 2;
+        let mut cumulative = 0u64;
+        let mut bucket = 0usize;
+        for (i, &count) in age_hist.iter().enumerate() {
+            cumulative += count;
+            if cumulative >= target {
+                bucket = i;
+                break;
+            }
+        }
+        now - AGE_BUCKET_REP_DAYS[bucket] * SECS_PER_DAY
+    };
+
+    (sorted, other, median_mtime)
+}
+
 fn build_dto(
     tree: &ScanTree,
     idx: u32,
@@ -148,6 +242,7 @@ fn build_dto(
         .skip(consumed)
         .map(|&c| tree.nodes[c as usize].size)
         .sum();
+    let (file_types, file_types_other, median_mtime) = subtree_stats(tree, idx);
     FileNodeDto {
         id: idx.to_string(),
         name: display_name(tree, idx),
@@ -162,6 +257,9 @@ fn build_dto(
         last_modified: node.mtime,
         is_hidden: node.is_hidden,
         permissions: String::new(),
+        file_types,
+        file_types_other,
+        median_mtime,
     }
 }
 
