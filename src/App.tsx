@@ -1,9 +1,11 @@
-import { BarChart3, HardDriveIcon, InfoIcon, KeyboardIcon, Target } from "lucide-react";
+import { BarChart3, HardDriveIcon, History, InfoIcon, KeyboardIcon, Ruler, Target } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Button } from "@/components/ui/button";
 import { Dot } from "@/components/ui/dot";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useVisualizationSettings } from "@/hooks/useVisualizationSettings";
 import { useThemeSettings, VIZ_RAMP_BASE } from "@/hooks/useThemeSettings";
@@ -45,8 +47,16 @@ function App() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showNotices, setShowNotices] = useState(false);
-  const { visualizationType, setVisualizationType } = useVisualizationSettings();
-  const { theme, setTheme, accent, setAccent, resolvedFlavor, accentColor } = useThemeSettings();
+  const {
+    visualizationType,
+    setVisualizationType,
+    colorMode,
+    setColorMode,
+    ageThresholdDays,
+    setAgeThresholdDays,
+  } = useVisualizationSettings();
+  const { theme, setTheme, accent, setAccent, resolvedFlavor, accentColor, ageRampStops } =
+    useThemeSettings();
 
   const scannedPath = useRef<string>("");
 
@@ -406,6 +416,9 @@ function App() {
                 <TreeMapChart
                   data={currentViewNode}
                   rampStops={rampStops}
+                  colorMode={colorMode}
+                  ageRampStops={ageRampStops}
+                  ageThresholdDays={ageThresholdDays}
                   selectedId={selectedNode?.id}
                   onNodeSelect={setSelectedNode}
                   onNodeDoubleClick={handleNodeDoubleClick}
@@ -414,6 +427,9 @@ function App() {
               ) : (
                 <SunburstChart
                   data={currentViewNode}
+                  colorMode={colorMode}
+                  ageRampStops={ageRampStops}
+                  ageThresholdDays={ageThresholdDays}
                   selectedId={selectedNode?.id}
                   onNodeSelect={setSelectedNode}
                   onNodeDoubleClick={handleNodeDoubleClick}
@@ -428,8 +444,15 @@ function App() {
                 node={readoutNode}
                 parentSize={currentViewNode.size}
                 isSelection={!!selectedNode}
+                ageThresholdDays={ageThresholdDays}
               />
-              {visualizationType === "treemap" && <ColorScaleLegend rampStops={rampStops} />}
+              {(visualizationType === "treemap" || colorMode === "activeness") && (
+                <ColorScaleLegend
+                  rampStops={rampStops}
+                  colorMode={colorMode}
+                  ageRampStops={ageRampStops}
+                />
+              )}
             </div>
           </div>
         ) : (
@@ -497,6 +520,54 @@ function App() {
                 <Target className="h-3 w-3" />
               </ToggleGroupItem>
             </ToggleGroup>
+
+            <Dot />
+
+            <ToggleGroup
+              type="single"
+              value={colorMode}
+              onValueChange={(value) => {
+                if (value === "size" || value === "activeness") setColorMode(value);
+              }}
+              variant="outline"
+              size="sm"
+            >
+              <ToggleGroupItem value="size" aria-label="Color by size" className="h-6 w-6 p-0">
+                <Ruler className="h-3 w-3" />
+              </ToggleGroupItem>
+              <ToggleGroupItem value="activeness" aria-label="Color by activeness" className="h-6 w-6 p-0">
+                <History className="h-3 w-3" />
+              </ToggleGroupItem>
+            </ToggleGroup>
+
+            {colorMode === "activeness" && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm" className="gap-1.5" title="Activeness threshold">
+                    <History className="w-3.5 h-3.5" />
+                    {(ageThresholdDays / 365).toFixed(ageThresholdDays % 365 === 0 ? 0 : 1)}y
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-56 space-y-2">
+                  <span className="micro-label text-muted-foreground">Dormant after (years)</span>
+                  <Input
+                    type="number"
+                    min="0.5"
+                    max="10"
+                    step="0.5"
+                    value={(ageThresholdDays / 365).toString()}
+                    onChange={(e) => {
+                      const years = Number(e.target.value);
+                      if (years > 0) setAgeThresholdDays(Math.round(years * 365));
+                    }}
+                    className="w-full"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Folders whose median file is this old read fully “old” (red).
+                  </p>
+                </PopoverContent>
+              </Popover>
+            )}
 
             <Dot />
 
