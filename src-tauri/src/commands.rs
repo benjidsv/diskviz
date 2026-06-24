@@ -191,8 +191,8 @@ fn subtree_stats(tree: &ScanTree, idx: u32) -> (Vec<FileTypeStat>, u64, i64) {
         .collect();
     sorted.sort_unstable_by(|a, b| b.size.cmp(&a.size).then_with(|| a.ext.cmp(&b.ext)));
 
-    let other: u64 = sorted.iter().skip(5).map(|s| s.size).sum();
-    sorted.truncate(5);
+    let other: u64 = sorted.iter().skip(8).map(|s| s.size).sum();
+    sorted.truncate(8);
 
     let median_mtime = if file_count == 0 {
         0

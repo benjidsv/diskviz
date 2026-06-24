@@ -78,10 +78,10 @@ export const VIZ_AGE_BASE: Record<ThemeFlavor, readonly string[]> = {
  * These are static — they do NOT change with accent.
  */
 export const VIZ_SUN_COLORS: Record<ThemeFlavor, readonly string[]> = {
-  latte:     ["#1e66f5", "#209fb5", "#179299", "#40a02b", "#df8e1d", "#fe640b", "#8839ef"],
-  frappe:    ["#8caaee", "#85c1dc", "#81c8be", "#a6d189", "#e5c890", "#ef9f76", "#ca9ee6"],
-  macchiato: ["#8aadf4", "#7dc4e4", "#8bd5ca", "#a6da95", "#eed49f", "#f5a97f", "#c6a0f6"],
-  mocha:     ["#89b4fa", "#74c7ec", "#94e2d5", "#a6e3a1", "#f9e2af", "#fab387", "#cba6f7"],
+  latte:     ["#1e66f5", "#209fb5", "#179299", "#40a02b", "#df8e1d", "#fe640b", "#8839ef", "#e64553"],
+  frappe:    ["#8caaee", "#85c1dc", "#81c8be", "#a6d189", "#e5c890", "#ef9f76", "#ca9ee6", "#e78284"],
+  macchiato: ["#8aadf4", "#7dc4e4", "#8bd5ca", "#a6da95", "#eed49f", "#f5a97f", "#c6a0f6", "#ed8796"],
+  mocha:     ["#89b4fa", "#74c7ec", "#94e2d5", "#a6e3a1", "#f9e2af", "#fab387", "#cba6f7", "#f38ba8"],
 };
 
 function isValidSetting(v: string | null): v is ThemeSetting {

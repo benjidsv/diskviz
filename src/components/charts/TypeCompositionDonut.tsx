@@ -6,9 +6,9 @@ interface TypeCompositionDonutProps {
   slices: CompSlice[];
 }
 
-const SIZE = 96;
-const RADIUS = 36;
-const STROKE = 14;
+const RADIUS = 60;
+const STROKE = 30;
+const SIZE = (RADIUS + Math.ceil(STROKE / 2)) * 2 + 4; // 138 — derived so stroke never clips
 const CIRC = 2 * Math.PI * RADIUS;
 const CENTER = SIZE / 2;
 
@@ -18,9 +18,10 @@ export const TypeCompositionDonut: React.FC<TypeCompositionDonutProps> = ({ slic
     return <div className="text-xs text-muted-foreground">No file-type data</div>;
   }
 
+  const total = slices.reduce((acc, s) => acc + s.size, 0);
   let offset = 0;
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-4">
       <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} className="shrink-0">
         <circle
           cx={CENTER}
@@ -50,6 +51,20 @@ export const TypeCompositionDonut: React.FC<TypeCompositionDonutProps> = ({ slic
           offset += dash;
           return seg;
         })}
+        <text
+          x={CENTER}
+          y={CENTER}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          style={{
+            fontSize: "10px",
+            fontFamily: "var(--font-mono)",
+            fill: "var(--foreground)",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {formatFileSize(total)}
+        </text>
       </svg>
       <ul className="space-y-1 text-xs">
         {slices.map((s, i) => (
