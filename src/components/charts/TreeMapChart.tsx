@@ -19,7 +19,7 @@ interface TreeMapChartProps {
   ageRampStops: string[];
   ageThresholdDays: number;
   selectedId?: string;
-  onNodeSelect?: (node: FileNode) => void;
+  onNodeSelect?: (node: FileNode | null) => void;
   onNodeDoubleClick?: (node: FileNode) => void;
   onNodeDeleted?: (node: FileNode) => void;
 }
@@ -116,7 +116,7 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
 
     const handleClick = (e: React.MouseEvent) => {
       e.preventDefault();
-      onNodeSelect?.(originalNode);
+      onNodeSelect?.(isSelected ? null : originalNode);
     };
 
     const handleDoubleClick = (e: React.MouseEvent) => {
@@ -139,7 +139,7 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
     const handleKeyDown = (e: React.KeyboardEvent) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        onNodeSelect?.(originalNode);
+        onNodeSelect?.(isSelected ? null : originalNode);
       }
     };
 

@@ -235,6 +235,15 @@ function App() {
       const tag = (event.target as HTMLElement)?.tagName;
       const isTyping = tag === "INPUT" || tag === "TEXTAREA";
 
+      if (event.key === "Escape" && !isTyping) {
+        if (showShortcuts) {
+          setShowShortcuts(false);
+        } else {
+          setSelectedNode(null);
+        }
+        return;
+      }
+
       if (event.metaKey || event.ctrlKey) {
         switch (event.key) {
           case "o":
@@ -609,6 +618,7 @@ function App() {
             <ShortcutRow label="Open folder" keys={["⌘O"]} />
             <ShortcutRow label="Drill into folder" keys={["Double-click"]} />
             <ShortcutRow label="Select an item" keys={["Click"]} />
+            <ShortcutRow label="Deselect / dismiss" keys={["Esc"]} />
             <ShortcutRow label="Navigate back / forward" keys={["⌘Z", "⌘⇧Z"]} />
             <ShortcutRow label="Swipe to navigate back / forward" keys={["← →"]} />
             <ShortcutRow label="Jump to an ancestor" keys={["Click breadcrumb"]} />

@@ -16,7 +16,7 @@ interface SunburstChartProps {
   ageRampStops: string[];
   ageThresholdDays: number;
   selectedId?: string;
-  onNodeSelect?: (node: FileNode) => void;
+  onNodeSelect?: (node: FileNode | null) => void;
   onNodeDoubleClick?: (node: FileNode) => void;
   onNodeDeleted?: (node: FileNode) => void;
 }
@@ -267,12 +267,12 @@ const SunburstChart: React.FC<SunburstChartProps> = ({
                   aria-label={`${node.name} - ${formatFileSize(node.size)}`}
                   onClick={(e) => {
                     e.preventDefault();
-                    onNodeSelect?.(node);
+                    onNodeSelect?.(isSelected ? null : node);
                   }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      onNodeSelect?.(node);
+                      onNodeSelect?.(isSelected ? null : node);
                     }
                   }}
                   onDoubleClick={(e) => {
