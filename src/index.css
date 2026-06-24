@@ -273,6 +273,7 @@
 .readout {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 /* Uppercase, letter-spaced micro-labels for section headers (SELECTED, SIZE).
@@ -282,7 +283,7 @@
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 10px;
-  line-height: 1.2;
+  line-height: 1;
 }
 
 /* SVG treemap tile focus ring — outline isn't supported on SVG elements in WebKit */

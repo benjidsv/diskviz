@@ -71,7 +71,7 @@ const ScanProgress: React.FC<ScanProgressProps> = ({ progress, rootPath, onCance
       </div>
 
       <div className="flex justify-center">
-        <Button variant="outline" size="sm" onClick={onCancel}>
+        <Button variant="destructive" size="sm" onClick={onCancel}>
           Cancel scan
         </Button>
       </div>

@@ -4,7 +4,7 @@ import { activeness, formatAge, formatFileSize, formatPercentage } from "@/utils
 import { Dot } from "@/components/ui/dot";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useThemeSettings, VIZ_AGE_BASE, VIZ_SUN_COLORS } from "@/hooks/useThemeSettings";
-import { compositionSlices, topTypesText } from "./TypeCompositionBar";
+import { compositionSlices } from "./TypeCompositionBar";
 import { TypeCompositionDonut } from "./TypeCompositionDonut";
 import type { ActivenessLabel } from "@/utils/formatters";
 import type { ThemeFlavor } from "@/hooks/useThemeSettings";
@@ -87,12 +87,12 @@ export const DetailReadout: React.FC<DetailReadoutProps> = ({
             <Dot />
             <Popover>
               <PopoverTrigger
-                className="flex items-center gap-1 text-muted-foreground hover:text-foreground focus-visible:text-foreground shrink-0"
+                className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground focus-visible:text-foreground shrink-0"
                 aria-label="File-type breakdown"
                 title="File-type breakdown"
               >
                 <PieChartIcon className="w-3 h-3" />
-                <span>{topTypesText(slices)}</span>
+                <span>Composition</span>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-3">
                 <TypeCompositionDonut slices={slices} />
