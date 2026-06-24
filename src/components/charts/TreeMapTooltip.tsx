@@ -39,7 +39,6 @@ export const TreeMapTooltip: React.FC<TreeMapTooltipProps> = ({
   if (!visible || !data) return null;
 
   const isDir = data.originalNode.type === "directory";
-  const modified = data.originalNode.lastModified;
   const median = data.originalNode.medianMtime ?? 0;
   const slices = compositionSlices(
     data.originalNode.fileTypes,
@@ -73,15 +72,12 @@ export const TreeMapTooltip: React.FC<TreeMapTooltipProps> = ({
             {formatFileSize(data.size)} · {formatPercentage(data.size, parentSize)} of parent
           </div>
           {slices.length > 0 ? (
-            <div className="flex items-center gap-1.5">
-              <TypeCompositionBar slices={slices} className="w-16" />
-              <span>{topTypesText(slices, 2)}</span>
+            <div className="space-y-0.5">
+              <TypeCompositionBar slices={slices} className="w-full" />
+              <div>{topTypesText(slices, 2)}</div>
             </div>
           ) : null}
           {median ? <div>Median age {formatAge(median)}</div> : null}
-          {modified ? (
-            <div>Modified {new Date(modified * 1000).toLocaleDateString()}</div>
-          ) : null}
         </div>
       </div>
     </div>

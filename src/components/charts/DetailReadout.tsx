@@ -3,26 +3,29 @@ import { FileIcon, FolderIcon, PieChartIcon } from "lucide-react";
 import { activeness, formatAge, formatFileSize, formatPercentage } from "@/utils/formatters";
 import { Dot } from "@/components/ui/dot";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useThemeSettings, VIZ_SUN_COLORS } from "@/hooks/useThemeSettings";
-import { compositionSlices, topTypesText, TypeCompositionBar } from "./TypeCompositionBar";
+import { useThemeSettings, VIZ_AGE_BASE, VIZ_SUN_COLORS } from "@/hooks/useThemeSettings";
+import { compositionSlices, topTypesText } from "./TypeCompositionBar";
 import { TypeCompositionDonut } from "./TypeCompositionDonut";
+import type { ActivenessLabel } from "@/utils/formatters";
+import type { ThemeFlavor } from "@/hooks/useThemeSettings";
 import type { FileNode } from "@/types";
 
+/** Map an activeness label to the matching stop in VIZ_AGE_BASE (green→yellow→peach→red). */
+function ageColor(label: ActivenessLabel, flavor: ThemeFlavor): string {
+  const stops = VIZ_AGE_BASE[flavor];
+  // Active/Recent → green (0), Stale → yellow (1), Dormant → red (3)
+  if (label === "Active" || label === "Recent") return stops[0];
+  if (label === "Stale") return stops[1];
+  return stops[3];
+}
+
 interface DetailReadoutProps {
-  /** The node to describe: a selected child, or the current directory. */
   node: FileNode | null;
-  /** Current directory size — denominator for the selection's percentage. */
   parentSize: number;
-  /** True when `node` is a selected child; false when it's the current dir. */
   isSelection: boolean;
-  /** Staleness threshold (days) for the activeness category label. */
   ageThresholdDays: number;
 }
 
-/**
- * Instrument-style readout for the selected (or current) node. Sits in the viz
- * footer strip so the user never has to chase a value with the cursor.
- */
 export const DetailReadout: React.FC<DetailReadoutProps> = ({
   node,
   parentSize,
@@ -43,13 +46,11 @@ export const DetailReadout: React.FC<DetailReadoutProps> = ({
   }
 
   const isDir = node.type === "directory";
-  const modified = node.lastModified;
   const slices = compositionSlices(
     node.fileTypes,
     node.fileTypesOther,
     VIZ_SUN_COLORS[resolvedFlavor],
   );
-  const avgSize = node.fileCount > 0 ? node.size / node.fileCount : 0;
   const median = node.medianMtime ?? 0;
   const act = median ? activeness(median, ageThresholdDays) : null;
 
@@ -81,24 +82,17 @@ export const DetailReadout: React.FC<DetailReadoutProps> = ({
             {node.dirCount.toLocaleString()} folders
           </>
         )}
-        {avgSize > 0 && (
-          <>
-            <Dot />
-            avg {formatFileSize(avgSize)}
-          </>
-        )}
         {slices.length > 0 && (
           <>
             <Dot />
-            <TypeCompositionBar slices={slices} />
-            <span className="truncate">{topTypesText(slices)}</span>
             <Popover>
               <PopoverTrigger
-                className="text-muted-foreground hover:text-foreground focus-visible:text-foreground shrink-0"
+                className="flex items-center gap-1 text-muted-foreground hover:text-foreground focus-visible:text-foreground shrink-0"
                 aria-label="File-type breakdown"
                 title="File-type breakdown"
               >
-                <PieChartIcon className="w-3.5 h-3.5" />
+                <PieChartIcon className="w-3 h-3" />
+                <span>{topTypesText(slices)}</span>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-3">
                 <TypeCompositionDonut slices={slices} />
@@ -109,13 +103,9 @@ export const DetailReadout: React.FC<DetailReadoutProps> = ({
         {act ? (
           <>
             <Dot />
-            median {formatAge(median)} ({act.label})
-          </>
-        ) : null}
-        {modified ? (
-          <>
-            <Dot />
-            {new Date(modified * 1000).toLocaleDateString()}
+            <span style={{ color: ageColor(act.label, resolvedFlavor) }}>
+              median {formatAge(median)} · {act.label}
+            </span>
           </>
         ) : null}
       </span>
