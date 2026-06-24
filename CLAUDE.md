@@ -9,7 +9,7 @@ Tauri v2 + React 19 + Rust disk usage visualizer. Scanner uses `jwalk` on the Ru
 - **Styling:** Tailwind v4 (`@tailwindcss/vite`), CSS custom properties for theming, no `dark:` classes
 - **UI primitives:** Radix UI wrapped in shadcn-style components under `src/components/ui/`
 - **Class merging:** `clsx` + `tailwind-merge` via `src/lib/utils.ts`
-- **Charts:** `recharts` (treemap), hand-rolled SVG (sunburst)
+- **Charts:** `recharts` (treemap), hand-rolled SVG (sunburst, file-type donut)
 
 See [`docs/theming.md`](docs/theming.md) for the color system, Catppuccin palette, and picker details.
 
@@ -27,18 +27,18 @@ npm run build      # tsc + vite build
 src/
   App.tsx                          # root: scan, selection, error/cancel/empty states, forward/back stack, macOS menu events, drag-drop, swipe gestures, footer (settings)
   index.css                        # theme variable blocks + viz ramp/sun tokens; --radius scale; .readout / .micro-label utilities
-  types.ts                         # shared types: FileNode (+ hiddenChildren/hiddenSize), ScanSummary, ScanProgress
+  types.ts                         # shared types: FileNode (+ hiddenChildren/hiddenSize, fileTypes/fileTypesOther, medianMtime), FileTypeStat, ScanSummary, ScanProgress
   lib/
     colorScale.ts                  # hexToRgb, interpolateStops, readableInk, relativeLuminance
-    api.ts                         # Tauri invoke wrappers (incl. cancelScan)
+    api.ts                         # Tauri invoke wrappers (incl. cancelScan; getSubtree takes maxDepth/maxChildren/offset)
     utils.ts                       # cn() helper
   utils/
-    formatters.ts                  # formatFileSize, formatDuration, formatNumber, formatPercentage
+    formatters.ts                  # formatFileSize, formatDuration, formatNumber, formatPercentage, formatAge, activeness (age→score+label)
   hooks/
-    useThemeSettings.ts            # theme/accent state; ACCENT_COLORS, VIZ_RAMP_BASE, VIZ_SUN_COLORS tables
+    useThemeSettings.ts            # theme/accent state; ACCENT_COLORS, VIZ_RAMP_BASE, VIZ_SUN_COLORS, VIZ_AGE_BASE tables; ageRampStops
     useTreeMapData.ts              # FileNode → treemap data (+ synthetic "Other" tile from hiddenChildren/hiddenSize); OTHER_NODE_ID, isOtherNode
     useTreeMapInteraction.ts       # hover/tooltip state for treemap
-    useVisualizationSettings.ts    # persists treemap vs sunburst choice
+    useVisualizationSettings.ts    # persists view (treemap/sunburst), colorMode (size/activeness), ageThresholdDays
     useNativeContextMenu.ts        # native macOS context menus (showNodeContextMenu, showBreadcrumbContextMenu)
   components/
     TopBar.tsx                     # HUD: brand · back/forward · breadcrumb trail · live stats · Open
@@ -48,11 +48,14 @@ src/
     ScanProgress.tsx               # scan-in-progress panel (progressbar ARIA + Cancel)
     NoticesModal.tsx               # open-source notices modal
     charts/
-      TreeMapChart.tsx             # recharts Treemap + continuous color gradient; single-click select
-      SunburstChart.tsx            # hand-rolled SVG sunburst; single-click select; keyboard a11y
+      TreeMapChart.tsx             # recharts Treemap + continuous color gradient (size or activeness); single-click select/toggle
+      SunburstChart.tsx            # hand-rolled SVG sunburst (size or activeness); single-click select; keyboard a11y
       TreeMapTooltip.tsx           # floating tooltip
-      DetailReadout.tsx            # selected/current node readout (viz footer strip)
-      ColorScaleLegend.tsx         # treemap size→color gradient legend
+      DetailReadout.tsx            # selected/current node readout (viz footer strip): size, %, file/folder counts, composition popover, median-age tag
+      ColorScaleLegend.tsx         # color legend; size→color gradient (treemap) or activeness fresh→old ramp
+      TypeCompositionBar.tsx       # compact stacked bar of file-type mix; compositionSlices() + topTypesText() helpers
+      TypeCompositionDonut.tsx     # donut + legend of file-type mix (composition popover content)
+      vizColor.ts                  # sizeColorRgb / activenessColorRgb / neutralRgb — node → fill for both color modes
       DeleteConfirmDialog.tsx      # confirm trash dialog (with item counts)
     ui/
       button.tsx, input.tsx        # shadcn-style primitives
@@ -66,8 +69,15 @@ src/
 ## Shell
 
 - **TopBar** (`TopBar.tsx`) is the location/stats HUD; it owns the single breadcrumb trail and back/forward buttons. The breadcrumb is the only path display (no duplicate raw path). Root crumb is accented; the `/` volume root suppresses its trailing separator to avoid `//`.
-- **Footer** holds settings only (accent, theme, view toggle, shortcuts, notices). Live stats live in the TopBar, not the footer.
+- **Footer** holds settings only (accent, theme, view toggle, color-mode toggle + age-threshold control, shortcuts, notices). Live stats live in the TopBar, not the footer.
 - Directory selection is one step: Browse / `⌘O` / drag-drop a folder onto the window all scan immediately (no separate input row or Analyze button).
+
+## Color modes & subtree stats
+
+- **Two color modes** (`useVisualizationSettings`, persisted): `size` colors tiles/arcs by log-normalized size along the accent ramp (`VIZ_RAMP_BASE`); `activeness` colors by median file age (fresh→old, green→red) along `VIZ_AGE_BASE`, scaled by `ageThresholdDays` (default 730). `vizColor.ts` maps a node to a fill in either mode; nodes without age data (synthetic "Other", empty folders) fall back to a neutral tone.
+- **Subtree stats are computed in Rust** (`commands.rs` `subtree_stats`) per `get_subtree` call, not in the frontend: top-8 file extensions by size + a summed `fileTypesOther` remainder, and a bucketed-median mtime (`medianMtime`) from a coarse age histogram. Surfaced in `DetailReadout` (composition popover + age tag).
+- **Adaptive "Other" bucket** (`commands.rs` `adaptive_visible_count`): shows the smallest N children (min 12, max `maxChildren`) such that the hidden remainder never exceeds the smallest shown tile, so "Other" is never the biggest tile. The "Other" tile stays drillable via `getSubtree(..., offset)` pagination.
+- **Scan cancel:** `cancelScan()` flips an `AtomicBool` in `AppState.cancel`, polled inside the scan to abort early and reject the in-flight `scan_directory`.
 
 ## Accessibility state
 
