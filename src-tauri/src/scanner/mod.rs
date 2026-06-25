@@ -18,6 +18,26 @@ mod walk_macos;
 #[cfg(target_os = "windows")]
 mod walk_windows;
 
+// ── Walker selection ──────────────────────────────────────────────────────────
+
+/// Identifies which enumeration back-end to use for a scan.
+///
+/// `scan()` (the public API used by the Tauri commands) always uses
+/// `Walker::Default`. Tests and the comparison harness can pass a specific
+/// variant to `scan_with()` to request a particular path without resorting
+/// to env-var juggling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Walker {
+    /// Today's behaviour: platform fast-path (custom) unless `DISKVIZ_NO_BULK=1`,
+    /// in which case the jwalk fallback is used.
+    Default,
+    /// Always use the platform-native fast walker (`walk_macos` / `walk_windows`).
+    Custom,
+    /// Always use the jwalk fallback (env-var-free).
+    Jwalk,
+    // Mft variant will be added here when the MFT/WizTree-style walker lands.
+}
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -333,44 +353,50 @@ fn finalize(
     }
 }
 
-// ── scan() ────────────────────────────────────────────────────────────────────
+// ── scan() / scan_with() ─────────────────────────────────────────────────────
 
-pub fn scan<F: FnMut(Progress)>(
+/// Scan `root` with a specific walker back-end. This is the testable seam;
+/// `scan()` delegates here with `Walker::Default`.
+pub fn scan_with<F: FnMut(Progress)>(
     root: PathBuf,
     cancel: Arc<AtomicBool>,
     mut on_progress: F,
+    walker: Walker,
 ) -> std::io::Result<ScanTree> {
     let start = Instant::now();
     let denom = volume_used_bytes(&root).unwrap_or(0);
 
-    // Capture the reference clock once; both Phase A (in finalize) and
-    // remove_subtree use this same value so age buckets stay consistent.
     let scan_now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
 
-    // ── macOS fast path: getattrlistbulk as primary enumeration ──────────────
-    // Replaces jwalk entirely on macOS (unless DISKVIZ_NO_BULK=1 is set, which
-    // forces the jwalk path below for A/B benchmarking).
+    let use_custom = match walker {
+        Walker::Custom  => true,
+        Walker::Jwalk   => false,
+        Walker::Default => std::env::var_os("DISKVIZ_NO_BULK").is_none(),
+    };
+
+    // ── macOS fast path ───────────────────────────────────────────────────────
     #[cfg(target_os = "macos")]
-    if std::env::var_os("DISKVIZ_NO_BULK").is_none() {
+    if use_custom {
         let (nodes, root_index) =
             walk_macos::walk(root.clone(), Arc::clone(&cancel), denom, &mut on_progress)?;
         return Ok(finalize(nodes, root_index, root, start, scan_now_secs));
     }
 
-    // ── Windows fast path: GetFileInformationByHandleEx (FileIdBothDirectoryInfo)
-    // Replaces jwalk on Windows (unless DISKVIZ_NO_BULK=1 is set).
-    // Uses allocated bytes (size on disk) to match the macOS path.
+    // ── Windows fast path ─────────────────────────────────────────────────────
     #[cfg(target_os = "windows")]
-    if std::env::var_os("DISKVIZ_NO_BULK").is_none() {
+    if use_custom {
         let (nodes, root_index) =
             walk_windows::walk(root.clone(), Arc::clone(&cancel), denom, &mut on_progress)?;
         return Ok(finalize(nodes, root_index, root, start, scan_now_secs));
     }
 
-    // ── jwalk path (non-macOS, non-Windows, or DISKVIZ_NO_BULK=1) ────────────
+    // Suppress unused-variable warning on non-macOS, non-Windows builds.
+    let _ = use_custom;
+
+    // ── jwalk path ────────────────────────────────────────────────────────────
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8)
@@ -511,6 +537,16 @@ pub fn scan<F: FnMut(Progress)>(
     Ok(finalize(nodes, root_index, root, start, scan_now_secs))
 }
 
+/// Scan `root` with the default walker strategy (env-var–aware fast path).
+/// This is the public API used by all Tauri commands.
+pub fn scan<F: FnMut(Progress)>(
+    root: PathBuf,
+    cancel: Arc<AtomicBool>,
+    on_progress: F,
+) -> std::io::Result<ScanTree> {
+    scan_with(root, cancel, on_progress, Walker::Default)
+}
+
 // ── volume_used_bytes ─────────────────────────────────────────────────────────
 
 #[cfg(unix)]
@@ -536,6 +572,8 @@ fn volume_used_bytes(_path: &std::path::Path) -> Option<u64> { None }
 mod tests {
     use super::*;
     use std::fs;
+
+    // ── Existing integration tests ──────────────────────────────────────────
 
     #[test]
     fn aggregates_sizes_and_counts() {
@@ -639,20 +677,254 @@ mod tests {
         let cancel1 = Arc::new(AtomicBool::new(false));
         let cancel2 = Arc::new(AtomicBool::new(false));
 
-        // Walk via walk_macos (DISKVIZ_NO_BULK must not be set).
-        std::env::remove_var("DISKVIZ_NO_BULK");
-        let fast = scan(root.clone(), cancel1, |_| {}).unwrap();
+        // Walk via walk_macos path (Walker::Custom).
+        let fast = scan_with(root.clone(), cancel1, |_| {}, Walker::Custom).unwrap();
 
-        // Walk via jwalk fallback.
-        std::env::set_var("DISKVIZ_NO_BULK", "1");
-        let slow = scan(root.clone(), cancel2, |_| {}).unwrap();
-        std::env::remove_var("DISKVIZ_NO_BULK");
+        // Walk via jwalk fallback (Walker::Jwalk — no env-var needed).
+        let slow = scan_with(root.clone(), cancel2, |_| {}, Walker::Jwalk).unwrap();
 
         assert_eq!(fast.total_files, slow.total_files, "file count");
         assert_eq!(fast.total_dirs,  slow.total_dirs,  "dir count");
         assert_eq!(fast.total_size,  slow.total_size,  "total size");
 
         // Root histogram totals must match.
+        let fh: u32 = fast.dir_stats.get(&fast.root).unwrap().age_hist.iter().sum();
+        let sh: u32 = slow.dir_stats.get(&slow.root).unwrap().age_hist.iter().sum();
+        assert_eq!(fh, sh, "age_hist total (file count) matches");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // ── New unit tests for pure helpers ────────────────────────────────────
+
+    // ── extension_of ───────────────────────────────────────────────────────
+
+    #[test]
+    fn ext_no_extension() {
+        assert_eq!(extension_of("README"), "");
+        assert_eq!(extension_of(""), "");
+    }
+
+    #[test]
+    fn ext_multiple_dots() {
+        // Only the final component after the last dot is the extension.
+        assert_eq!(extension_of("archive.tar.gz"), "gz");
+    }
+
+    #[test]
+    fn ext_dotfile_has_no_extension() {
+        // A file whose name starts with a dot and has no further dot is a dotfile,
+        // not a file with extension "gitignore".
+        assert_eq!(extension_of(".gitignore"), "");
+        assert_eq!(extension_of(".hidden"), "");
+    }
+
+    #[test]
+    fn ext_uppercased_becomes_lowercase() {
+        assert_eq!(extension_of("Image.PNG"), "png");
+        assert_eq!(extension_of("Movie.MOV"), "mov");
+    }
+
+    #[test]
+    fn ext_trailing_dot() {
+        // A trailing dot means the extension is an empty string.
+        assert_eq!(extension_of("file."), "");
+    }
+
+    // ── age_bucket ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn age_bucket_lengths_and_monotonic() {
+        assert_eq!(AGE_BUCKET_DAYS.len(), 8);
+        assert_eq!(AGE_BUCKET_REP_DAYS.len(), 9);
+        // Boundaries must be strictly increasing.
+        for w in AGE_BUCKET_DAYS.windows(2) {
+            assert!(w[0] < w[1], "AGE_BUCKET_DAYS must be monotonically increasing");
+        }
+        for w in AGE_BUCKET_REP_DAYS.windows(2) {
+            assert!(w[0] < w[1], "AGE_BUCKET_REP_DAYS must be monotonically increasing");
+        }
+    }
+
+    #[test]
+    fn age_bucket_each_boundary() {
+        // age_days < 1 → bucket 0
+        assert_eq!(age_bucket(0), 0);
+        // age_days == boundary → falls into the NEXT bucket (position finds first b > age)
+        assert_eq!(age_bucket(1),    1, "age=1 → bucket 1");
+        assert_eq!(age_bucket(7),    2, "age=7 → bucket 2");
+        assert_eq!(age_bucket(30),   3, "age=30 → bucket 3");
+        assert_eq!(age_bucket(90),   4, "age=90 → bucket 4");
+        assert_eq!(age_bucket(180),  5, "age=180 → bucket 5");
+        assert_eq!(age_bucket(365),  6, "age=365 → bucket 6");
+        assert_eq!(age_bucket(730),  7, "age=730 → bucket 7");
+        assert_eq!(age_bucket(1825), 8, "age=1825 → bucket 8 (open-ended)");
+        // Values inside each bucket's range.
+        assert_eq!(age_bucket(6),    1, "age=6 < 7 → bucket 1");
+        assert_eq!(age_bucket(29),   2, "age=29 < 30 → bucket 2");
+    }
+
+    #[test]
+    fn age_bucket_negative_age() {
+        // Negative age (future mtime) → bucket 0.
+        assert_eq!(age_bucket(-1), 0);
+        assert_eq!(age_bucket(-999), 0);
+    }
+
+    #[test]
+    fn age_bucket_huge_age() {
+        assert_eq!(age_bucket(9999), 8, "very old → last (open-ended) bucket");
+        assert_eq!(age_bucket(i64::MAX / 2), 8);
+    }
+
+    // ── remove_subtree ancestor propagation ───────────────────────────────
+
+    /// Build a minimal 3-level arena by hand and verify that remove_subtree
+    /// correctly subtracts size, file_count, and dir_count from ALL ancestors,
+    /// and removes the extension entry from all ancestor DirStats.
+    #[test]
+    fn remove_subtree_ancestor_propagation() {
+        // Layout:
+        //   root  (idx 0, dir)
+        //     └── mid   (idx 1, dir)
+        //           └── leaf  (idx 2, file, .rs, size 1000)
+
+        let nodes = vec![
+            Node { name: "/root".into(), size: 1000, file_count: 1, dir_count: 1,
+                   is_dir: true, is_hidden: false, mtime: 0, parent: None, children: vec![1] },
+            Node { name: "mid".into(),  size: 1000, file_count: 1, dir_count: 0,
+                   is_dir: true, is_hidden: false, mtime: 0, parent: Some(0), children: vec![2] },
+            Node { name: "leaf.rs".into(), size: 1000, file_count: 0, dir_count: 0,
+                   is_dir: false, is_hidden: false, mtime: 0, parent: Some(1), children: vec![] },
+        ];
+
+        let ext_names = vec!["rs".to_string()];
+        let mut dir_stats = std::collections::HashMap::new();
+        // Build minimal DirStats: root and mid each have .rs with 1000 bytes, 1 file in bucket 0.
+        dir_stats.insert(0u32, DirStats { age_hist: [1,0,0,0,0,0,0,0,0], exts: vec![(0,1000)] });
+        dir_stats.insert(1u32, DirStats { age_hist: [1,0,0,0,0,0,0,0,0], exts: vec![(0,1000)] });
+
+        let mut tree = ScanTree {
+            nodes,
+            root: 0,
+            root_path: std::path::PathBuf::from("/root"),
+            total_size: 1000,
+            total_files: 1,
+            total_dirs: 1,
+            scan_duration_ms: 0,
+            ext_names,
+            dir_stats,
+            scan_now_secs: 0,
+        };
+
+        tree.remove_subtree(2); // delete leaf.rs
+
+        // Size/count must drop to zero for all nodes up the chain.
+        assert_eq!(tree.nodes[0].size,       0, "root size zeroed");
+        assert_eq!(tree.nodes[0].file_count, 0, "root file_count zeroed");
+        // Deleting a file node does NOT decrement dir_count (d_dirs = 0 for files).
+        // root still has dir_count=1 (the 'mid' directory is unchanged).
+        assert_eq!(tree.nodes[0].dir_count,  1, "root dir_count unchanged (mid dir still there)");
+        assert_eq!(tree.nodes[1].size,       0, "mid size zeroed");
+        assert_eq!(tree.nodes[1].file_count, 0, "mid file_count zeroed");
+
+        // mid must no longer be in root's children.
+        // leaf must no longer be in mid's children.
+        assert!(!tree.nodes[1].children.contains(&2), "leaf detached from mid");
+
+        // DirStats: the .rs ext must have been removed from both root and mid.
+        assert!(tree.dir_stats[&0].exts.is_empty(), "root exts cleared");
+        assert!(tree.dir_stats[&1].exts.is_empty(), "mid exts cleared");
+        assert_eq!(tree.dir_stats[&0].age_hist[0], 0, "root bucket 0 decremented");
+        assert_eq!(tree.dir_stats[&1].age_hist[0], 0, "mid bucket 0 decremented");
+    }
+
+    #[test]
+    fn remove_subtree_saturating_sub_guard() {
+        // Verify that underflowing counts saturate to 0 rather than panicking
+        // (the implementation uses saturating_sub everywhere).
+        let nodes = vec![
+            Node { name: "root".into(), size: 0, file_count: 0, dir_count: 0,
+                   is_dir: true, is_hidden: false, mtime: 0, parent: None, children: vec![1] },
+            Node { name: "file.bin".into(), size: 500, file_count: 0, dir_count: 0,
+                   is_dir: false, is_hidden: false, mtime: 0, parent: Some(0), children: vec![] },
+        ];
+        let ext_names = vec!["bin".to_string()];
+        let mut dir_stats = std::collections::HashMap::new();
+        // Intentionally incorrect stats (0 rather than 1) to trigger the underflow path.
+        dir_stats.insert(0u32, DirStats { age_hist: [0;9], exts: vec![(0, 500)] });
+        let mut tree = ScanTree {
+            nodes, root: 0,
+            root_path: std::path::PathBuf::from("."),
+            total_size: 0, total_files: 0, total_dirs: 0,
+            scan_duration_ms: 0,
+            ext_names, dir_stats, scan_now_secs: 0,
+        };
+        // Should not panic.
+        tree.remove_subtree(1);
+        assert_eq!(tree.nodes[0].size, 0);
+    }
+
+    // ── path_of ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn path_of_reconstructs_path() {
+        // Three-level tree: root → sub → file
+        let root_path = std::path::PathBuf::from("/base");
+        let nodes = vec![
+            Node { name: "/base".into(), size: 0, file_count: 0, dir_count: 0,
+                   is_dir: true, is_hidden: false, mtime: 0, parent: None, children: vec![1] },
+            Node { name: "sub".into(), size: 0, file_count: 0, dir_count: 0,
+                   is_dir: true, is_hidden: false, mtime: 0, parent: Some(0), children: vec![2] },
+            Node { name: "file.txt".into(), size: 0, file_count: 0, dir_count: 0,
+                   is_dir: false, is_hidden: false, mtime: 0, parent: Some(1), children: vec![] },
+        ];
+        let tree = ScanTree {
+            nodes,
+            root: 0,
+            root_path: root_path.clone(),
+            total_size: 0, total_files: 0, total_dirs: 0,
+            scan_duration_ms: 0,
+            ext_names: vec![],
+            dir_stats: std::collections::HashMap::new(),
+            scan_now_secs: 0,
+        };
+
+        assert_eq!(tree.path_of(0), root_path, "root → root_path");
+        assert_eq!(tree.path_of(1), root_path.join("sub"), "sub dir");
+        assert_eq!(tree.path_of(2), root_path.join("sub").join("file.txt"), "nested file");
+    }
+
+    // ── Windows parity test ────────────────────────────────────────────────
+
+    /// Windows parity: the custom GetFileInformationByHandleEx walker and the
+    /// jwalk fallback must yield identical file counts, dir counts, and total
+    /// sizes on the same fixture tree.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn windows_walker_parity() {
+        let root = std::env::temp_dir()
+            .join(format!("diskviz_win_parity_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("sub\\deep")).unwrap();
+        fs::write(root.join("a.rs"),              vec![0u8; 4096]).unwrap();
+        fs::write(root.join("sub\\b.toml"),       vec![0u8; 4096]).unwrap();
+        fs::write(root.join("sub\\c.toml"),       vec![0u8; 4096]).unwrap();
+        fs::write(root.join("sub\\deep\\d.rs"),   vec![0u8; 4096]).unwrap();
+        fs::write(root.join(".hidden"),            vec![0u8; 4096]).unwrap();
+
+        let cancel1 = Arc::new(AtomicBool::new(false));
+        let cancel2 = Arc::new(AtomicBool::new(false));
+
+        // Custom path: GetFileInformationByHandleEx walker.
+        let fast = scan_with(root.clone(), cancel1, |_| {}, Walker::Custom).unwrap();
+        // jwalk fallback (no env-var juggling).
+        let slow = scan_with(root.clone(), cancel2, |_| {}, Walker::Jwalk).unwrap();
+
+        assert_eq!(fast.total_files, slow.total_files, "file count");
+        assert_eq!(fast.total_dirs,  slow.total_dirs,  "dir count");
+        assert_eq!(fast.total_size,  slow.total_size,  "total size");
+
         let fh: u32 = fast.dir_stats.get(&fast.root).unwrap().age_hist.iter().sum();
         let sh: u32 = slow.dir_stats.get(&slow.root).unwrap().age_hist.iter().sum();
         assert_eq!(fh, sh, "age_hist total (file count) matches");

@@ -138,3 +138,94 @@ pub fn flatten(root_raw: RawNode, root_path: &PathBuf) -> (Vec<Node>, u32) {
 
     (nodes, 0) // root is always index 0
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a hand-crafted `RawNode` tree and verify that `flatten` produces
+    /// an arena where every child index is strictly greater than its parent
+    /// index, and that parent links are set correctly.
+    #[test]
+    fn flatten_child_idx_gt_parent_idx() {
+        // Tree layout:
+        //   root (dir)
+        //     ├── file_a (file, size 100)
+        //     └── sub   (dir)
+        //           └── file_b (file, size 200)
+        let root_raw = RawNode {
+            name: "root".into(),
+            size: 0,
+            mtime: 0,
+            is_dir: true,
+            is_hidden: false,
+            children: vec![
+                RawNode {
+                    name: "file_a".into(),
+                    size: 100,
+                    mtime: 1000,
+                    is_dir: false,
+                    is_hidden: false,
+                    children: vec![],
+                },
+                RawNode {
+                    name: "sub".into(),
+                    size: 0,
+                    mtime: 0,
+                    is_dir: true,
+                    is_hidden: false,
+                    children: vec![RawNode {
+                        name: "file_b".into(),
+                        size: 200,
+                        mtime: 2000,
+                        is_dir: false,
+                        is_hidden: false,
+                        children: vec![],
+                    }],
+                },
+            ],
+        };
+
+        let root_path = std::path::PathBuf::from("/base");
+        let (nodes, root_idx) = flatten(root_raw, &root_path);
+
+        assert_eq!(root_idx, 0, "root always at index 0");
+        assert_eq!(nodes.len(), 4, "root + file_a + sub + file_b");
+
+        // Root node: name replaced with full root_path, no parent.
+        assert_eq!(nodes[0].name, "/base");
+        assert!(nodes[0].is_dir);
+        assert!(nodes[0].parent.is_none());
+
+        // Child-idx > parent-idx invariant for every non-root node.
+        for (i, node) in nodes.iter().enumerate() {
+            if let Some(p) = node.parent {
+                assert!(
+                    i as u32 > p,
+                    "node {i} has parent {p} but child idx must be > parent idx"
+                );
+            }
+        }
+
+        // Parent links are set correctly.
+        for (i, node) in nodes.iter().enumerate().skip(1) {
+            let parent_idx = node.parent.expect("non-root must have a parent") as usize;
+            assert!(
+                nodes[parent_idx].children.contains(&(i as u32)),
+                "parent {parent_idx} must list child {i} in its children vec"
+            );
+        }
+
+        // Verify file sizes were preserved.
+        let file_a = nodes.iter().find(|n| n.name == "file_a").unwrap();
+        assert_eq!(file_a.size, 100);
+        assert_eq!(file_a.mtime, 1000);
+
+        let file_b = nodes.iter().find(|n| n.name == "file_b").unwrap();
+        assert_eq!(file_b.size, 200);
+        assert_eq!(file_b.mtime, 2000);
+    }
+}
+

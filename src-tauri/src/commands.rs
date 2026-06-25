@@ -330,3 +330,220 @@ fn dirs_home() -> PathBuf {
     if let Ok(h) = std::env::var("USERPROFILE") { return PathBuf::from(h); }
     PathBuf::from("/")
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scanner::{AGE_BUCKET_REP_DAYS, DirStats, Node, ScanTree, SECS_PER_DAY};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    // ── Shared fixture builder ─────────────────────────────────────────────────
+
+    /// Build a minimal `ScanTree` with a root directory containing `n` file
+    /// children whose sizes are given by `sizes` (largest first). The helper
+    /// assigns ascending ext-ids so each file has a distinct extension.
+    fn build_test_tree(sizes: &[u64]) -> ScanTree {
+        let mut nodes: Vec<Node> = Vec::new();
+
+        // Root directory (index 0).
+        let child_indices: Vec<u32> = (1..=sizes.len() as u32).collect();
+        nodes.push(Node {
+            name: "/root".into(),
+            size: sizes.iter().sum(),
+            file_count: sizes.len() as u64,
+            dir_count: 0,
+            is_dir: true,
+            is_hidden: false,
+            mtime: 0,
+            parent: None,
+            children: child_indices.clone(),
+        });
+
+        // One file child per size (already sorted largest-first per the test).
+        let mut ext_names: Vec<String> = Vec::new();
+        let mut age_hist = [0u32; 9];
+
+        for (i, &sz) in sizes.iter().enumerate() {
+            let ext = format!("ext{}", i);
+            ext_names.push(ext);
+            nodes.push(Node {
+                name: format!("file{}.ext{}", i, i),
+                size: sz,
+                file_count: 0,
+                dir_count: 0,
+                is_dir: false,
+                is_hidden: false,
+                mtime: 0,
+                parent: Some(0),
+                children: vec![],
+            });
+            age_hist[0] += 1; // all files land in bucket 0 (age_days == 0)
+        }
+
+        // Build dir_stats for root: each ext has the corresponding size.
+        let exts: Vec<(u32, u64)> = sizes
+            .iter()
+            .enumerate()
+            .map(|(i, &sz)| (i as u32, sz))
+            .collect();
+
+        let mut dir_stats: HashMap<u32, DirStats> = HashMap::new();
+        dir_stats.insert(
+            0,
+            DirStats {
+                age_hist,
+                exts,
+            },
+        );
+
+        ScanTree {
+            nodes,
+            root: 0,
+            root_path: PathBuf::from("/root"),
+            total_size: sizes.iter().sum(),
+            total_files: sizes.len() as u64,
+            total_dirs: 0,
+            scan_duration_ms: 0,
+            ext_names,
+            dir_stats,
+            scan_now_secs: 0,
+        }
+    }
+
+    // ── adaptive_visible_count ─────────────────────────────────────────────────
+
+    #[test]
+    fn avc_len_le_min_shown_returns_all() {
+        // With ≤ MIN_SHOWN (12) children the function must return all of them.
+        let sizes: Vec<u64> = (1..=12).map(|i| i * 1000).rev().collect(); // 12..1 kB
+        let tree = build_test_tree(&sizes);
+        let children = &tree.nodes[0].children;
+        assert_eq!(
+            adaptive_visible_count(&tree, children, 0, 200),
+            12,
+            "≤ MIN_SHOWN → all returned"
+        );
+    }
+
+    #[test]
+    fn avc_other_is_never_biggest_tile() {
+        // The invariant: hidden ≤ sizes[n-1] (the smallest shown tile).
+        // Use 20 files with exponentially dropping sizes so that the
+        // initial MIN_SHOWN window would leave a large hidden remainder.
+        let sizes: Vec<u64> = (0..20u64).map(|i| 1_000_000 / (i + 1)).collect();
+        let tree = build_test_tree(&sizes);
+        let children = &tree.nodes[0].children;
+        let n = adaptive_visible_count(&tree, children, 0, 200);
+        let node_sizes: Vec<u64> = children.iter().map(|&c| tree.nodes[c as usize].size).collect();
+        let total: u64 = node_sizes.iter().sum();
+        let shown_sum: u64 = node_sizes[..n].iter().sum();
+        let hidden = total - shown_sum;
+        assert!(
+            hidden <= node_sizes[n - 1],
+            "hidden ({hidden}) must be ≤ smallest shown tile ({})",
+            node_sizes[n - 1]
+        );
+    }
+
+    #[test]
+    fn avc_respects_max_clamp() {
+        // When max is less than what the invariant would choose, the result
+        // is clamped to max.
+        let sizes: Vec<u64> = (1..=30u64).map(|i| 1_000_000 / i).collect();
+        let tree = build_test_tree(&sizes);
+        let children = &tree.nodes[0].children;
+        let max = 15usize;
+        let n = adaptive_visible_count(&tree, children, 0, max);
+        assert!(n <= max, "n ({n}) must be ≤ max ({max})");
+    }
+
+    #[test]
+    fn avc_offset_past_end_returns_zero() {
+        let sizes = vec![100u64, 200, 300];
+        let tree = build_test_tree(&sizes);
+        let children = &tree.nodes[0].children;
+        // Offset beyond child count → rem is empty → len=0 ≤ MIN_SHOWN → returns 0.
+        assert_eq!(adaptive_visible_count(&tree, children, 100, 200), 0);
+    }
+
+    // ── subtree_stats ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn subtree_stats_empty_returns_zero_triple() {
+        let tree = build_test_tree(&[]);
+        // Root has a DirStats entry but age_hist is all zeros (no files).
+        let (ft, other, median) = subtree_stats(&tree, 0);
+        assert!(ft.is_empty(), "no exts");
+        assert_eq!(other, 0);
+        assert_eq!(median, 0, "no files → median 0");
+    }
+
+    #[test]
+    fn subtree_stats_no_dir_stats_returns_zero_triple() {
+        let tree = build_test_tree(&[100, 200]);
+        // Query a node index that has no DirStats (a file node, e.g. idx 1).
+        let (ft, other, _median) = subtree_stats(&tree, 1);
+        assert!(ft.is_empty());
+        assert_eq!(other, 0);
+    }
+
+    #[test]
+    fn subtree_stats_top_8_exts_and_other() {
+        // Build a tree with 10 extensions; the last 2 should be folded into other.
+        // Sizes are arranged largest-first.
+        let sizes: Vec<u64> = (1..=10u64).map(|i| (11 - i) * 1000).collect();
+        let tree = build_test_tree(&sizes);
+        let (ft, other, _median) = subtree_stats(&tree, 0);
+        assert_eq!(ft.len(), 8, "top-8 ext types returned");
+        // The two smallest extensions are summed into other.
+        let expected_other: u64 = sizes[8] + sizes[9];
+        assert_eq!(other, expected_other, "file_types_other is sum of exts beyond top-8");
+    }
+
+    #[test]
+    fn subtree_stats_exactly_8_exts_no_other() {
+        let sizes: Vec<u64> = (1..=8u64).map(|i| (9 - i) * 1000).collect();
+        let tree = build_test_tree(&sizes);
+        let (ft, other, _median) = subtree_stats(&tree, 0);
+        assert_eq!(ft.len(), 8);
+        assert_eq!(other, 0, "exactly 8 exts → no remainder");
+    }
+
+    #[test]
+    fn subtree_stats_median_bucket_index() {
+        // Build a tree where all files land in age_hist bucket 2 (7..30 days).
+        // We manually insert a DirStats entry with the desired histogram.
+        let mut tree = build_test_tree(&[100, 200, 300]);
+
+        // Override dir_stats: put 3 files into bucket 2.
+        tree.dir_stats.insert(
+            0,
+            DirStats {
+                age_hist: [0, 0, 3, 0, 0, 0, 0, 0, 0],
+                exts: vec![],
+            },
+        );
+
+        let (_ft, _other, median_mtime) = subtree_stats(&tree, 0);
+
+        // Median falls in bucket 2; representative days = AGE_BUCKET_REP_DAYS[2].
+        // median_mtime = now - REP_DAYS[2] * SECS_PER_DAY
+        // We don't freeze the clock, so check the structure: the result must be
+        // a Unix timestamp approximately (now - REP_DAYS[2] * SECS_PER_DAY).
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let rep_days = AGE_BUCKET_REP_DAYS[2];
+        let expected = now - rep_days * SECS_PER_DAY;
+        // Allow ±5 s tolerance for test execution lag.
+        assert!(
+            (median_mtime - expected).abs() < 5,
+            "median_mtime ({median_mtime}) should be close to now - REP_DAYS[2]*SECS_PER_DAY ({expected})"
+        );
+    }
+}
+
