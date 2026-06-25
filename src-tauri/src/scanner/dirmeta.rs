@@ -1,5 +1,6 @@
-//! Phase C: bulk directory metadata via `getattrlistbulk` (macOS) or None
-//! (all other platforms fall back to per-entry `entry.metadata()`).
+//! Bulk directory metadata: `getattrlistbulk` (macOS),
+//! `GetFileInformationByHandleEx` (Windows), or `None` (other platforms fall
+//! back to per-entry `entry.metadata()`).
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -16,6 +17,9 @@ pub struct RawMeta {
     pub ino: u64,
     /// Hard-link count (0 for dirs — caller detects dirs via `is_dir`).
     pub nlink: u32,
+    /// True when this entry is a reparse point / junction (Windows only).
+    /// Always `false` on macOS; callers should not recurse into reparse points.
+    pub is_reparse: bool,
 }
 
 // ── macOS implementation ──────────────────────────────────────────────────────
@@ -179,6 +183,7 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
                     dev: devid as u32 as u64, // dev_t is i32; zero-extend via u32
                     ino: fileid,
                     nlink,
+                    is_reparse: false, // macOS: getattrlistbulk never follows symlinks
                 });
             }
 
@@ -191,9 +196,139 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
     Some(result)
 }
 
-// ── Non-macOS stub ────────────────────────────────────────────────────────────
+// ── Windows implementation ────────────────────────────────────────────────────
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+        ERROR_NO_MORE_FILES,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, GetFileInformationByHandle, GetFileInformationByHandleEx,
+        BY_HANDLE_FILE_INFORMATION, FILE_ID_BOTH_DIR_INFO,
+        FileIdBothDirectoryInfo,
+        FILE_LIST_DIRECTORY, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+
+    // ── Open the directory ─────────────────────────────────────────────────
+    // FILE_FLAG_BACKUP_SEMANTICS is required to open a directory handle.
+    // FILE_FLAG_OPEN_REPARSE_POINT prevents following junctions/symlinks.
+    let wide: Vec<u16> = dir.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0u16))
+        .collect();
+
+    let handle: HANDLE = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            FILE_LIST_DIRECTORY,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            0,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE { return None; }
+
+    // ── Volume serial number for dev ───────────────────────────────────────
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    let ok = unsafe { GetFileInformationByHandle(handle, &mut info) };
+    let dev = if ok != 0 { info.dwVolumeSerialNumber as u64 } else { 0u64 };
+
+    // ── Buffer for bulk enumeration ────────────────────────────────────────
+    // 64 KB is enough for ~200–400 typical entries per call; the API fills as
+    // many complete records as fit and we loop until ERROR_NO_MORE_FILES.
+    const BUF_SIZE: usize = 64 * 1024;
+    let mut buf = vec![0u8; BUF_SIZE];
+    let mut result: HashMap<OsString, RawMeta> = HashMap::new();
+
+    // FILETIME epoch offset: 100-ns ticks from 1601-01-01 to 1970-01-01.
+    const FILETIME_TO_UNIX_SECS: i64 = 11_644_473_600i64;
+
+    loop {
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                handle,
+                FileIdBothDirectoryInfo,
+                buf.as_mut_ptr() as *mut _,
+                BUF_SIZE as u32,
+            )
+        };
+        if ok == 0 {
+            // ERROR_NO_MORE_FILES means we've seen everything.
+            if unsafe { GetLastError() } == ERROR_NO_MORE_FILES { break; }
+            // Any other error (e.g. ERROR_MORE_DATA with BUF_SIZE too small) —
+            // break and return whatever we have so far.
+            break;
+        }
+
+        // Walk the chain of FILE_ID_BOTH_DIR_INFO records in the buffer.
+        // Each record's NextEntryOffset gives the byte distance to the next;
+        // 0 means this is the last record in this buffer fill.
+        let mut offset = 0usize;
+        loop {
+            // Safety: buf is BUF_SIZE bytes; offset advances by NextEntryOffset
+            // which is set by the OS and guaranteed to keep records in-bounds.
+            let rec_ptr = unsafe { buf.as_ptr().add(offset) as *const FILE_ID_BOTH_DIR_INFO };
+            let rec = unsafe { &*rec_ptr };
+
+            let next = rec.NextEntryOffset as usize;
+
+            // FILE_ID_BOTH_DIR_INFO::FileName is a flexible array member;
+            // FileNameLength is in bytes (UTF-16 units × 2).
+            let name_len_chars = rec.FileNameLength as usize / 2;
+            let name_ptr = rec.FileName.as_ptr();
+            // Safety: name_ptr points into buf which is live for this loop body.
+            let name_wide = unsafe { std::slice::from_raw_parts(name_ptr, name_len_chars) };
+            let name = OsString::from_wide(name_wide);
+
+            // Skip the mandatory "." and ".." entries that Win32 always includes.
+            let name_str = name.to_string_lossy();
+            if name_str != "." && name_str != ".." && !name_str.is_empty() {
+                let attrs = rec.FileAttributes;
+                let is_dir     = attrs & FILE_ATTRIBUTE_DIRECTORY != 0;
+                let is_reparse = attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+
+                // AllocationSize: i64 (LARGE_INTEGER). 0 for dirs.
+                let alloc = rec.AllocationSize;
+                let size  = if is_dir { 0 } else { alloc.max(0) as u64 };
+
+                // LastWriteTime: FILETIME stored as i64 (100-ns ticks since 1601).
+                let ft   = rec.LastWriteTime;
+                let mtime = (ft / 10_000_000) - FILETIME_TO_UNIX_SECS;
+
+                // FileId: i64 unique file ID within the volume.
+                let ino = rec.FileId as u64;
+
+                result.insert(name, RawMeta {
+                    size,
+                    mtime,
+                    is_dir,
+                    dev,
+                    ino,
+                    nlink: 1, // Not available in FileIdBothDirectoryInfo
+                    is_reparse,
+                });
+            }
+
+            if next == 0 { break; }
+            offset += next;
+        }
+    }
+
+    unsafe { CloseHandle(handle) };
+    Some(result)
+}
+
+// ── Non-macOS, non-Windows stub ───────────────────────────────────────────────
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn bulk_dir_meta(_dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
     None
 }
@@ -230,6 +365,7 @@ mod tests {
             assert_eq!(rm.ino, meta.ino(),        "{name}: inode mismatch");
             assert_eq!(rm.size, meta.blocks() * 512, "{name}: size mismatch");
             assert!((rm.mtime - meta.mtime()).abs() <= 1, "{name}: mtime mismatch");
+            assert!(!rm.is_reparse, "{name}: regular file is not a reparse point");
         }
 
         // Directory entry
@@ -238,6 +374,45 @@ mod tests {
         let sub_meta = fs::symlink_metadata(dir.join("sub")).unwrap();
         assert!(sub_rm.is_dir, "sub: should be dir");
         assert_eq!(sub_rm.ino, sub_meta.ino(), "sub: inode mismatch");
+        assert!(!sub_rm.is_reparse, "sub: regular dir is not a reparse point");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Windows dirmeta: basic sanity check (file/dir detection, non-zero size,
+    /// mtime in a plausible range). Run on Windows only.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn dirmeta_windows_basic() {
+        use std::ffi::OsStr;
+
+        let dir = std::env::temp_dir()
+            .join(format!("diskviz_dirmeta_win_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("a.txt"), vec![0u8; 4096]).unwrap();
+        fs::create_dir(dir.join("sub")).unwrap();
+
+        let result = bulk_dir_meta(&dir)
+            .expect("bulk_dir_meta should succeed on Windows");
+
+        let a = result.get(OsStr::new("a.txt"))
+            .expect("a.txt missing from result");
+        assert!(!a.is_dir, "a.txt should not be a directory");
+        assert!(a.size > 0, "a.txt should have non-zero allocated size");
+        // mtime should be a reasonably recent unix timestamp (after year 2000).
+        assert!(a.mtime > 946_684_800, "mtime should be after year 2000");
+        assert!(!a.is_reparse, "a.txt is not a reparse point");
+
+        let sub = result.get(OsStr::new("sub"))
+            .expect("sub dir missing from result");
+        assert!(sub.is_dir, "sub should be a directory");
+        assert_eq!(sub.size, 0, "dir size is always 0 from bulk path");
+        assert!(!sub.is_reparse, "regular dir is not a reparse point");
+
+        // Neither "." nor ".." should appear.
+        assert!(!result.contains_key(OsStr::new(".")),  ". must be filtered");
+        assert!(!result.contains_key(OsStr::new("..")), ".. must be filtered");
 
         let _ = fs::remove_dir_all(&dir);
     }

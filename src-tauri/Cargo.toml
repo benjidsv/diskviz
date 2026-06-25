@@ -29,6 +29,12 @@ dashmap = "6"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+] }
+
 [profile.release]
 codegen-units = 1
 lto = true

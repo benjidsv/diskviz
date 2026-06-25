@@ -12,8 +12,11 @@
 //! used with per-entry `metadata()` calls.
 
 pub mod dirmeta;
+pub mod walk_common;
 #[cfg(target_os = "macos")]
 mod walk_macos;
+#[cfg(target_os = "windows")]
+mod walk_windows;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -357,7 +360,17 @@ pub fn scan<F: FnMut(Progress)>(
         return Ok(finalize(nodes, root_index, root, start, scan_now_secs));
     }
 
-    // ── jwalk path (non-macOS or DISKVIZ_NO_BULK=1) ───────────────────────────
+    // ── Windows fast path: GetFileInformationByHandleEx (FileIdBothDirectoryInfo)
+    // Replaces jwalk on Windows (unless DISKVIZ_NO_BULK=1 is set).
+    // Uses allocated bytes (size on disk) to match the macOS path.
+    #[cfg(target_os = "windows")]
+    if std::env::var_os("DISKVIZ_NO_BULK").is_none() {
+        let (nodes, root_index) =
+            walk_windows::walk(root.clone(), Arc::clone(&cancel), denom, &mut on_progress)?;
+        return Ok(finalize(nodes, root_index, root, start, scan_now_secs));
+    }
+
+    // ── jwalk path (non-macOS, non-Windows, or DISKVIZ_NO_BULK=1) ────────────
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8)
