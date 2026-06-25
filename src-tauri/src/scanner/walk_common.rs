@@ -35,19 +35,26 @@ pub struct RawNode {
 // ── Shared counters ───────────────────────────────────────────────────────────
 
 pub struct WalkStats {
-    pub file_count:    AtomicU64,
-    pub dir_count:     AtomicU64,
-    pub bytes_scanned: AtomicU64,
-    pub last_emit_ms:  AtomicU64,
+    pub file_count:        AtomicU64,
+    pub dir_count:         AtomicU64,
+    pub bytes_scanned:     AtomicU64,
+    pub last_emit_ms:      AtomicU64,
+    /// Dirs where bulk enumeration returned `None` and we fell back to `readdir_meta`.
+    pub readdir_fallbacks: AtomicU64,
+    /// Dirs where both bulk enumeration and `readdir_meta` returned `None`
+    /// (empty leaf emitted — dir is genuinely unreadable).
+    pub open_failures:     AtomicU64,
 }
 
 impl Default for WalkStats {
     fn default() -> Self {
         Self {
-            file_count:    AtomicU64::new(0),
-            dir_count:     AtomicU64::new(0),
-            bytes_scanned: AtomicU64::new(0),
-            last_emit_ms:  AtomicU64::new(0),
+            file_count:        AtomicU64::new(0),
+            dir_count:         AtomicU64::new(0),
+            bytes_scanned:     AtomicU64::new(0),
+            last_emit_ms:      AtomicU64::new(0),
+            readdir_fallbacks: AtomicU64::new(0),
+            open_failures:     AtomicU64::new(0),
         }
     }
 }

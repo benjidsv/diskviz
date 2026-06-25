@@ -16,7 +16,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
-use dashmap::DashSet;
 use rayon::prelude::*;
 
 use super::dirmeta;
@@ -29,8 +28,10 @@ use super::walk_common::{emit_progress_if_due, flatten, Msg, RawNode, WalkStats}
 /// Parallelism: subdirectories are processed via `rayon::par_iter`; the caller
 /// must run this inside a `rayon::ThreadPool::install` scope.
 ///
-/// `visited` is shared across threads; it prevents re-entering directory loops
-/// (junctions can create cycles on Windows).
+/// Reparse points (junctions / symlinks) are emitted as non-recursive empty
+/// leaves, matching `follow_links(false)` in the jwalk path.  No directory
+/// dedup is performed — this matches the Windows jwalk path, which also does no
+/// dedup (`#[cfg(not(unix))]` branch in `mod.rs`).
 ///
 /// `tx` is a cloneable `Sender`; each recursive call receives an owned clone so
 /// that all rayon workers can emit progress without a shared lock.
@@ -39,7 +40,6 @@ fn walk_dir(
     name:      String,
     mtime:     i64,
     is_hidden: bool,
-    visited:   &Arc<DashSet<(u64, u64)>>,
     cancel:    &Arc<AtomicBool>,
     stats:     &Arc<WalkStats>,
     denom:     u64,
@@ -49,16 +49,28 @@ fn walk_dir(
         return RawNode { name, size: 0, mtime, is_dir: true, is_hidden, children: vec![] };
     }
 
-    let Some(entries) = dirmeta::bulk_dir_meta(&path) else {
-        // Directory unreadable (permissions, etc.) — emit as an empty leaf.
-        stats.dir_count.fetch_add(1, Ordering::Relaxed);
-        return RawNode { name, size: 0, mtime, is_dir: true, is_hidden, children: vec![] };
+    // Try the bulk path first; fall back to readdir_meta on failure so we don't
+    // drop whole subtrees the way jwalk wouldn't.
+    let entries = match dirmeta::bulk_dir_meta(&path) {
+        Some(e) => e,
+        None => match dirmeta::readdir_meta(&path) {
+            Some(e) => {
+                stats.readdir_fallbacks.fetch_add(1, Ordering::Relaxed);
+                e
+            }
+            None => {
+                // Both failed — dir is genuinely unreadable; emit empty leaf.
+                stats.open_failures.fetch_add(1, Ordering::Relaxed);
+                stats.dir_count.fetch_add(1, Ordering::Relaxed);
+                return RawNode { name, size: 0, mtime, is_dir: true, is_hidden, children: vec![] };
+            }
+        },
     };
 
     stats.dir_count.fetch_add(1, Ordering::Relaxed);
 
-    let mut file_nodes:   Vec<RawNode>                        = Vec::new();
-    let mut subdir_tasks: Vec<(String, PathBuf, i64, u64, u64)> = Vec::new();
+    let mut file_nodes:   Vec<RawNode>              = Vec::new();
+    let mut subdir_tasks: Vec<(String, PathBuf, i64)> = Vec::new();
 
     for (fname, rm) in entries.into_iter() {
         let fname_str    = fname.to_string_lossy().into_owned();
@@ -73,15 +85,9 @@ fn walk_dir(
                     name: fname_str, size: 0, mtime: rm.mtime,
                     is_dir: true, is_hidden: is_child_hid, children: vec![],
                 });
-            } else if !visited.insert((rm.dev, rm.ino)) {
-                // Already visited via a junction loop — emit as empty leaf.
-                file_nodes.push(RawNode {
-                    name: fname_str, size: 0, mtime: rm.mtime,
-                    is_dir: true, is_hidden: is_child_hid, children: vec![],
-                });
             } else {
                 let subpath = path.join(&fname);
-                subdir_tasks.push((fname_str, subpath, rm.mtime, rm.dev, rm.ino));
+                subdir_tasks.push((fname_str, subpath, rm.mtime));
             }
         } else {
             // Windows hardlinks: nlink is always 1 from FileIdBothDirectoryInfo,
@@ -101,10 +107,10 @@ fn walk_dir(
     // Recurse into subdirectories in parallel.
     let subdir_nodes: Vec<RawNode> = subdir_tasks
         .into_par_iter()
-        .map(|(cname, cpath, cmtime, _dev, _ino)| {
+        .map(|(cname, cpath, cmtime)| {
             let cis_hid = cname.starts_with('.');
             walk_dir(cpath, cname, cmtime, cis_hid,
-                     visited, cancel, stats, denom, tx.clone())
+                     cancel, stats, denom, tx.clone())
         })
         .collect();
 
@@ -136,66 +142,16 @@ pub fn walk<F: FnMut(super::Progress)>(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    // Seed visited with the root's (dev, ino) so junction loops back to the
-    // root are detected. We re-use bulk_dir_meta on the root's parent to get
-    // the FileId, but fall back to (0,0) if that's unavailable — not worth
-    // failing the scan over.
-    let root_dev_ino: (u64, u64) = {
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
-        use windows_sys::Win32::Storage::FileSystem::{
-            CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-            FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE,
-            OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        };
-
-        let wide: Vec<u16> = root.as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0u16))
-            .collect();
-        let h = unsafe {
-            CreateFileW(
-                wide.as_ptr(),
-                FILE_READ_ATTRIBUTES,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                std::ptr::null(),
-                OPEN_EXISTING,
-                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-                std::ptr::null_mut(),
-            )
-        };
-        if h == INVALID_HANDLE_VALUE {
-            (0, 0)
-        } else {
-            let mut fi: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-            let ok = unsafe { GetFileInformationByHandle(h, &mut fi) };
-            unsafe { CloseHandle(h) };
-            if ok != 0 {
-                let dev = fi.dwVolumeSerialNumber as u64;
-                let ino = ((fi.nFileIndexHigh as u64) << 32) | (fi.nFileIndexLow as u64);
-                (dev, ino)
-            } else {
-                (0, 0)
-            }
-        }
-    };
-
-    let visited: Arc<DashSet<(u64, u64)>> = Arc::new(DashSet::new());
-    let stats:   Arc<WalkStats>           = Arc::new(WalkStats::default());
-
-    if root_dev_ino != (0, 0) {
-        visited.insert(root_dev_ino);
-    }
+    let stats: Arc<WalkStats> = Arc::new(WalkStats::default());
 
     let (tx, rx) = std::sync::mpsc::channel::<Msg>();
 
     let root_name = root.to_string_lossy().into_owned();
 
-    let root2    = root.clone();
-    let cancel2  = Arc::clone(&cancel);
-    let visited2 = Arc::clone(&visited);
-    let stats2   = Arc::clone(&stats);
-    let tx2      = tx.clone();
+    let root2   = root.clone();
+    let cancel2 = Arc::clone(&cancel);
+    let stats2  = Arc::clone(&stats);
+    let tx2     = tx.clone();
 
     // Build a dedicated rayon pool with an 8 MB stack per worker.
     // Windows default thread stack is 1 MB — deep trees need headroom.
@@ -217,7 +173,7 @@ pub fn walk<F: FnMut(super::Progress)>(
         let root_node = pool.install(|| {
             walk_dir(
                 root2, root_name, root_mtime, false,
-                &visited2, &cancel2, &stats2, denom,
+                &cancel2, &stats2, denom,
                 tx2.clone(),
             )
         });
@@ -237,6 +193,17 @@ pub fn walk<F: FnMut(super::Progress)>(
 
     if cancel.load(Ordering::Relaxed) {
         return Err(io::Error::new(io::ErrorKind::Interrupted, "scan cancelled"));
+    }
+
+    // Optional diagnostics: set DISKVIZ_WALK_DIAG=1 to see fallback stats.
+    if std::env::var_os("DISKVIZ_WALK_DIAG").is_some() {
+        eprintln!(
+            "[walk_windows] files={}  dirs={}  readdir_fallbacks={}  open_failures={}",
+            stats.file_count.load(Ordering::Relaxed),
+            stats.dir_count.load(Ordering::Relaxed),
+            stats.readdir_fallbacks.load(Ordering::Relaxed),
+            stats.open_failures.load(Ordering::Relaxed),
+        );
     }
 
     Ok(flatten(root_raw, &root))

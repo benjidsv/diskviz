@@ -114,7 +114,13 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
                 FSOPT_NOFOLLOW | FSOPT_PACK_INVAL_ATTRS,
             )
         };
-        if n <= 0 { break; }
+        if n == 0 { break; }
+        if n < 0 {
+            // Error mid-enumeration (I/O error, FD invalidated, etc.).
+            // Close and return None so callers can fall back to readdir_meta.
+            unsafe { libc::close(fd) };
+            return None;
+        }
 
         // Safety: getattrlistbulk wrote `n` complete records into buf.
         // read_unaligned is used throughout because getattrlistbulk packs
@@ -263,9 +269,11 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
         if ok == 0 {
             // ERROR_NO_MORE_FILES means we've seen everything.
             if unsafe { GetLastError() } == ERROR_NO_MORE_FILES { break; }
-            // Any other error (e.g. ERROR_MORE_DATA with BUF_SIZE too small) —
-            // break and return whatever we have so far.
-            break;
+            // Any other error (e.g. ERROR_MORE_DATA if a record doesn't fit the
+            // buffer) — return None so the caller can fall back to readdir_meta
+            // rather than silently returning a truncated child list.
+            unsafe { CloseHandle(handle) };
+            return None;
         }
 
         // Walk the chain of FILE_ID_BOTH_DIR_INFO records in the buffer.
@@ -331,6 +339,96 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn bulk_dir_meta(_dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
     None
+}
+
+// ── Cross-platform readdir fallback ──────────────────────────────────────────
+
+/// Enumerate `dir` via `std::fs::read_dir` + `symlink_metadata`, returning the
+/// same `HashMap<OsString, RawMeta>` shape as `bulk_dir_meta`.
+///
+/// This is the *fallback* path: called by both native walkers when
+/// `bulk_dir_meta` returns `None` (open-failure or mid-enumeration error),
+/// so the walker can still list the directory's children rather than dropping
+/// the whole subtree.  The semantics deliberately mirror what the jwalk path
+/// does internally — `symlink_metadata` (no link following), allocated-block
+/// size on Unix / logical size on Windows — so results converge with the
+/// `Walker::Jwalk` baseline.
+///
+/// Returns `None` only if `read_dir` itself fails (dir is genuinely unreadable
+/// by any path, matching what jwalk would skip).
+pub fn readdir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
+    use std::time::UNIX_EPOCH;
+
+    let rd = std::fs::read_dir(dir).ok()?;
+    let mut result = HashMap::new();
+
+    for entry in rd.flatten() {
+        let name = entry.file_name();
+        let path = entry.path();
+
+        // symlink_metadata = lstat: never follows symlinks/junctions.
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        let ft       = meta.file_type();
+        let is_dir   = ft.is_dir();
+        // On Windows, is_symlink() covers both symlinks and junctions (reparse
+        // points) — these are the entries the walker must not recurse into.
+        // On Unix, symlinks to directories are also caught here.
+        let is_reparse = ft.is_symlink();
+
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        // Size semantics mirror the jwalk path in mod.rs:
+        //   Unix  → allocated blocks × 512  (mod.rs:433)
+        //   Windows → logical file length   (mod.rs:454)
+        //   Dirs  → 0 always (child-aggregated later)
+        let size = if is_dir {
+            0u64
+        } else {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                meta.blocks().saturating_mul(512)
+            }
+            #[cfg(not(unix))]
+            {
+                meta.len()
+            }
+        };
+
+        // dev/ino/nlink for hardlink dedup and visited-set checks.
+        // macOS: dev_t is i32 — zero-extend via u32 to match bulk_dir_meta's
+        //   `devid as u32 as u64` convention so the visited set stays consistent.
+        // Windows: nlink is always 1 (not available cheaply); dev/ino unused
+        //   since the Windows walker performs no directory dedup.
+        #[cfg(target_os = "macos")]
+        let (dev, ino, nlink) = {
+            use std::os::unix::fs::MetadataExt;
+            (meta.dev() as u32 as u64, meta.ino(), meta.nlink() as u32)
+        };
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let (dev, ino, nlink) = {
+            use std::os::unix::fs::MetadataExt;
+            (meta.dev(), meta.ino(), meta.nlink() as u32)
+        };
+        #[cfg(not(unix))]
+        let (dev, ino, nlink) = (0u64, 0u64, 1u32);
+
+        result.insert(
+            name,
+            RawMeta { size, mtime, is_dir, dev, ino, nlink, is_reparse },
+        );
+    }
+
+    Some(result)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -413,6 +511,42 @@ mod tests {
         // Neither "." nor ".." should appear.
         assert!(!result.contains_key(OsStr::new(".")),  ". must be filtered");
         assert!(!result.contains_key(OsStr::new("..")), ".. must be filtered");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `readdir_meta` and `bulk_dir_meta` must agree on entry names and
+    /// is_dir classification for a fixture tree.  Sizes may differ (allocated
+    /// blocks vs. logical length) so we only compare counts and dir/file flags.
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn readdir_meta_parity() {
+        use std::ffi::OsStr;
+
+        let dir = std::env::temp_dir()
+            .join(format!("diskviz_rdmeta_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.txt"),  vec![0u8; 4096]).unwrap();
+        fs::write(dir.join("b.bin"),  vec![0u8; 8192]).unwrap();
+        fs::create_dir(dir.join("sub")).unwrap();
+
+        let bulk = bulk_dir_meta(&dir).expect("bulk_dir_meta should succeed");
+        let rdir = readdir_meta(&dir).expect("readdir_meta should succeed");
+
+        // Same set of names (readdir never returns "." or "..").
+        let mut bulk_names: Vec<_> = bulk.keys().map(|k| k.to_string_lossy().into_owned()).collect();
+        let mut rdir_names: Vec<_> = rdir.keys().map(|k| k.to_string_lossy().into_owned()).collect();
+        bulk_names.sort();
+        rdir_names.sort();
+        assert_eq!(bulk_names, rdir_names, "bulk and readdir must return same entry names");
+
+        // is_dir must agree for every entry.
+        for name in ["a.txt", "b.bin", "sub"] {
+            let b = bulk.get(OsStr::new(name)).unwrap_or_else(|| panic!("{name} missing from bulk"));
+            let r = rdir.get(OsStr::new(name)).unwrap_or_else(|| panic!("{name} missing from readdir"));
+            assert_eq!(b.is_dir, r.is_dir, "{name}: is_dir mismatch between bulk and readdir");
+        }
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -48,10 +48,22 @@ fn walk_dir(
         return RawNode { name, size: 0, mtime, is_dir: true, is_hidden, children: vec![] };
     }
 
-    let Some(entries) = dirmeta::bulk_dir_meta(&path) else {
-        // Directory unreadable — emit as an empty leaf.
-        stats.dir_count.fetch_add(1, Ordering::Relaxed);
-        return RawNode { name, size: 0, mtime, is_dir: true, is_hidden, children: vec![] };
+    // Try the bulk path first; fall back to readdir_meta on failure so we don't
+    // drop whole subtrees the way jwalk wouldn't.
+    let entries = match dirmeta::bulk_dir_meta(&path) {
+        Some(e) => e,
+        None => match dirmeta::readdir_meta(&path) {
+            Some(e) => {
+                stats.readdir_fallbacks.fetch_add(1, Ordering::Relaxed);
+                e
+            }
+            None => {
+                // Both failed — dir is genuinely unreadable; emit empty leaf.
+                stats.open_failures.fetch_add(1, Ordering::Relaxed);
+                stats.dir_count.fetch_add(1, Ordering::Relaxed);
+                return RawNode { name, size: 0, mtime, is_dir: true, is_hidden, children: vec![] };
+            }
+        },
     };
 
     stats.dir_count.fetch_add(1, Ordering::Relaxed);
@@ -194,6 +206,17 @@ pub fn walk<F: FnMut(super::Progress)>(
 
     if cancel.load(Ordering::Relaxed) {
         return Err(io::Error::new(io::ErrorKind::Interrupted, "scan cancelled"));
+    }
+
+    // Optional diagnostics: set DISKVIZ_WALK_DIAG=1 to see fallback stats.
+    if std::env::var_os("DISKVIZ_WALK_DIAG").is_some() {
+        eprintln!(
+            "[walk_macos] files={}  dirs={}  readdir_fallbacks={}  open_failures={}",
+            stats.file_count.load(Ordering::Relaxed),
+            stats.dir_count.load(Ordering::Relaxed),
+            stats.readdir_fallbacks.load(Ordering::Relaxed),
+            stats.open_failures.load(Ordering::Relaxed),
+        );
     }
 
     Ok(flatten(root_raw, &root))
