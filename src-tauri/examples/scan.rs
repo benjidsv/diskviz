@@ -13,6 +13,7 @@
 //!
 //! Exit code is 1 if any divergence is detected.
 
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -128,23 +129,29 @@ fn check_divergence(results: &[RunResult]) -> bool {
     let mut any = false;
     for r in results.iter().skip(1) {
         if r.files != ref_r.files {
+            let delta = r.files as i64 - ref_r.files as i64;
+            let pct   = if ref_r.files > 0 { delta as f64 / ref_r.files as f64 * 100.0 } else { 0.0 };
             eprintln!(
-                "DIVERGENCE: '{}' files={} vs '{}' files={}",
-                r.name, r.files, ref_r.name, ref_r.files
+                "DIVERGENCE: '{}' files={} vs '{}' files={}  (Δ={:+}, {:+.2}%)",
+                r.name, r.files, ref_r.name, ref_r.files, delta, pct
             );
             any = true;
         }
         if r.dirs != ref_r.dirs {
+            let delta = r.dirs as i64 - ref_r.dirs as i64;
+            let pct   = if ref_r.dirs > 0 { delta as f64 / ref_r.dirs as f64 * 100.0 } else { 0.0 };
             eprintln!(
-                "DIVERGENCE: '{}' dirs={} vs '{}' dirs={}",
-                r.name, r.dirs, ref_r.name, ref_r.dirs
+                "DIVERGENCE: '{}' dirs={} vs '{}' dirs={}  (Δ={:+}, {:+.2}%)",
+                r.name, r.dirs, ref_r.name, ref_r.dirs, delta, pct
             );
             any = true;
         }
         if r.size != ref_r.size {
+            let delta = r.size as i64 - ref_r.size as i64;
+            let pct   = if ref_r.size > 0 { delta as f64 / ref_r.size as f64 * 100.0 } else { 0.0 };
             eprintln!(
-                "DIVERGENCE: '{}' size={} vs '{}' size={}",
-                r.name, r.size, ref_r.name, ref_r.size
+                "DIVERGENCE: '{}' size={} vs '{}' size={}  (Δ={:+}, {:+.2}%)",
+                r.name, r.size, ref_r.name, ref_r.size, delta, pct
             );
             any = true;
         }
@@ -152,17 +159,116 @@ fn check_divergence(results: &[RunResult]) -> bool {
     any
 }
 
+// ── Per-child divergence breakdown ────────────────────────────────────────────
+
+/// Walk root's immediate children comparing custom vs jwalk walker counts.
+/// Prints a table sorted by absolute file-count delta, largest first.
+/// Only meaningful when both Custom and Jwalk walkers are available.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn run_child_diff(root: &PathBuf) {
+    use std::fs;
+
+    let children: Vec<_> = match fs::read_dir(root) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .collect(),
+        Err(e) => {
+            eprintln!("  cannot read root dir: {e}");
+            return;
+        }
+    };
+
+    if children.is_empty() {
+        println!("  no subdirectories found under root.");
+        return;
+    }
+
+    struct ChildResult {
+        name:         String,
+        custom_files: u64,
+        custom_dirs:  u64,
+        jwalk_files:  u64,
+        jwalk_dirs:   u64,
+    }
+
+    let mut rows: Vec<ChildResult> = Vec::new();
+
+    for entry in children {
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        print!("  {:30} custom... ", name);
+        let _ = std::io::stdout().flush();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let custom = match scan_with(path.clone(), cancel, |_| {}, Walker::Custom) {
+            Ok(t)  => (t.total_files, t.total_dirs),
+            Err(e) => { eprintln!("err: {e}"); continue; }
+        };
+
+        print!("jwalk... ");
+        let _ = std::io::stdout().flush();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let jw = match scan_with(path.clone(), cancel, |_| {}, Walker::Jwalk) {
+            Ok(t)  => (t.total_files, t.total_dirs),
+            Err(e) => { eprintln!("err: {e}"); continue; }
+        };
+        println!("done");
+
+        rows.push(ChildResult {
+            name,
+            custom_files: custom.0,
+            custom_dirs:  custom.1,
+            jwalk_files:  jw.0,
+            jwalk_dirs:   jw.1,
+        });
+    }
+
+    // Sort by |Δfiles| descending — the biggest mismatches first.
+    rows.sort_by(|a, b| {
+        let da = a.custom_files.abs_diff(a.jwalk_files);
+        let db = b.custom_files.abs_diff(b.jwalk_files);
+        db.cmp(&da)
+    });
+
+    println!();
+    println!(
+        "\n{:<32} {:>10} {:>10} {:>8}  {:>9} {:>9} {:>8}",
+        "child", "files(c)", "files(j)", "Δfiles", "dirs(c)", "dirs(j)", "Δdirs"
+    );
+    println!("{}", "-".repeat(92));
+
+    for r in &rows {
+        let df = r.custom_files as i64 - r.jwalk_files as i64;
+        let dd = r.custom_dirs  as i64 - r.jwalk_dirs  as i64;
+        println!(
+            "{:<32} {:>10} {:>10} {:>+8}  {:>9} {:>9} {:>+8}",
+            r.name, r.custom_files, r.jwalk_files, df,
+            r.custom_dirs,  r.jwalk_dirs,  dd,
+        );
+    }
+    println!();
+    println!(
+        "Tip: rerun with DISKVIZ_WALK_DIAG=1 to see readdir_fallbacks / open_failures \
+         per walk in the custom path."
+    );
+}
+
 // ── main ──────────────────────────────────────────────────────────────────────
 
 fn main() {
     let mut args = std::env::args().skip(1).peekable();
 
-    let path = args.next().expect("usage: scan <path> [--runs N] [--walker <name>]");
+    let path = args.next().expect("usage: scan <path> [--runs N] [--walker <name>] [--diff]");
     let root = PathBuf::from(&path);
 
     // Parse optional flags.
-    let mut runs: usize = 1;
-    let mut only_walker: Option<String> = None;
+    let mut runs:         usize          = 1;
+    let mut only_walker:  Option<String> = None;
+    let mut diff_mode:    bool           = false;
 
     while let Some(flag) = args.next() {
         match flag.as_str() {
@@ -175,6 +281,9 @@ fn main() {
             }
             "--walker" => {
                 only_walker = args.next();
+            }
+            "--diff" => {
+                diff_mode = true;
             }
             _ => {}
         }
@@ -211,6 +320,7 @@ fn main() {
         .into_iter()
         .map(|(name, walker)| {
             print!("  running '{name}'... ");
+            let _ = std::io::stdout().flush();
             let r = run_walker(name, walker, &root, runs);
             println!("done ({:.3}s)", r.elapsed.as_secs_f64());
             r
@@ -219,10 +329,27 @@ fn main() {
 
     print_table(&results);
 
-    if check_divergence(&results) {
+    let any_divergence = check_divergence(&results);
+    if any_divergence {
         eprintln!("\n❌  Divergence detected — walkers disagree on results.");
-        std::process::exit(1);
     } else if results.len() > 1 {
         println!("\n✅  All walkers agree.");
+    }
+
+    // Per-child breakdown: drill into which top-level dirs diverge.
+    if diff_mode {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            println!("\nPer-child breakdown (comparing custom vs jwalk on each sub-dir):");
+            run_child_diff(&root);
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            println!("--diff is only useful when the custom walker is available (macOS/Windows).");
+        }
+    }
+
+    if any_divergence {
+        std::process::exit(1);
     }
 }
