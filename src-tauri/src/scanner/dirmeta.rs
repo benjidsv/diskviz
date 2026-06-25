@@ -22,6 +22,34 @@ pub struct RawMeta {
 
 // ── macOS implementation ──────────────────────────────────────────────────────
 
+// getattrlistbulk attributes — from <sys/attr.h>, verified against the macOS SDK.
+//
+// Common attrs (pack order = ascending bit position, RETURNED_ATTRS always first):
+//   bit  0 (0x00000001): NAME       → attrreference_t (i32 offset + u32 len = 8 B)
+//   bit  1 (0x00000002): DEVID      → dev_t = i32 (4 B)
+//   bit  3 (0x00000008): OBJTYPE    → u_int32_t (4 B)
+//   bit 10 (0x00000400): MODTIME    → struct timespec (i64 tv_sec + i64 tv_nsec = 16 B)
+//   bit 25 (0x02000000): FILEID     → u_int64_t (8 B)
+//
+// File attrs (only present for VREG; zeroed for dirs with PACK_INVAL_ATTRS):
+//   bit  0 (0x00000001): LINKCOUNT  → u_int32_t (4 B)
+//   bit  2 (0x00000004): ALLOCSIZE  → off_t = i64 (8 B)
+
+#[cfg(target_os = "macos")]
+const MACOS_BUF_SIZE: usize = 256 * 1024;
+
+// The getattrlistbulk buffer (256 KB) is reused across every call on the same
+// rayon worker thread.  Allocating it per-call on 82k dirs wastes ~21 GB of
+// malloc/memset churn.  Safe: the buffer is fully parsed into an owned Vec before
+// bulk_dir_meta_fd returns, so no borrow outlives the call and there is no
+// re-entrant borrow risk (rayon workers steal work only when idle, not mid-call).
+#[cfg(target_os = "macos")]
+thread_local! {
+    static BULK_BUF: std::cell::RefCell<Vec<u8>> =
+        std::cell::RefCell::new(vec![0u8; MACOS_BUF_SIZE]);
+}
+
+/// Enumerate `dir` using `getattrlistbulk`.  Opens the fd internally.
 #[cfg(target_os = "macos")]
 pub fn bulk_dir_meta(dir: &Path) -> Option<Vec<(String, RawMeta)>> {
     use std::ffi::CString;
@@ -30,23 +58,16 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<Vec<(String, RawMeta)>> {
     let dir_cstr = CString::new(dir.as_os_str().as_bytes()).ok()?;
     let fd = unsafe { libc::open(dir_cstr.as_ptr(), libc::O_RDONLY) };
     if fd < 0 { return None; }
+    let result = bulk_dir_meta_fd(fd);
+    unsafe { libc::close(fd) };
+    result
+}
 
-    // All constants from <sys/attr.h> — verified against the macOS SDK header.
-    //
-    // Common attrs (pack order = ascending bit position, RETURNED_ATTRS always first):
-    //   bit  0 (0x00000001): NAME       → attrreference_t (i32 offset + u32 len = 8 B)
-    //   bit  1 (0x00000002): DEVID      → dev_t = i32 (4 B)
-    //   bit  3 (0x00000008): OBJTYPE    → u_int32_t (4 B)
-    //   bit 10 (0x00000400): MODTIME    → struct timespec (i64 tv_sec + i64 tv_nsec = 16 B)
-    //   bit 25 (0x02000000): FILEID     → u_int64_t (8 B)
-    //
-    // File attrs (only present for VREG; zeroed for dirs with PACK_INVAL_ATTRS):
-    //   bit  0 (0x00000001): LINKCOUNT  → u_int32_t (4 B)
-    //   bit  2 (0x00000004): ALLOCSIZE  → off_t = i64 (8 B)
-    //
-    // Directory attrs: not requested — dir size is always 0 from this path
-    // (negligible vs. child aggregation; avoids ATTR_DIR_ALLOCSIZE "not supported").
-
+/// Enumerate the directory referred to by the already-open `fd` using
+/// `getattrlistbulk`.  The fd is **not** closed — caller is responsible.
+/// Returns `None` on I/O error so callers can fall back to `readdir_meta`.
+#[cfg(target_os = "macos")]
+pub fn bulk_dir_meta_fd(fd: libc::c_int) -> Option<Vec<(String, RawMeta)>> {
     const ATTR_BIT_MAP_COUNT:      u16 = 5;
     const ATTR_CMN_RETURNED_ATTRS: u32 = 0x8000_0000;
     const ATTR_CMN_NAME:           u32 = 0x0000_0001;
@@ -96,111 +117,96 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<Vec<(String, RawMeta)>> {
         forkattr:    0,
     };
 
-    // 256 KB — sufficient for ~2 000 typical entries per call.
-    const BUF_SIZE: usize = 256 * 1024;
-    let mut buf = vec![0u8; BUF_SIZE];
-    let mut result: Vec<(String, RawMeta)> = Vec::new();
+    BULK_BUF.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let mut result: Vec<(String, RawMeta)> = Vec::new();
 
-    loop {
-        let n = unsafe {
-            getattrlistbulk(
-                fd,
-                &alist,
-                buf.as_mut_ptr() as *mut libc::c_void,
-                BUF_SIZE,
-                FSOPT_NOFOLLOW | FSOPT_PACK_INVAL_ATTRS,
-            )
-        };
-        if n == 0 { break; }
-        if n < 0 {
-            // Error mid-enumeration (I/O error, FD invalidated, etc.).
-            // Close and return None so callers can fall back to readdir_meta.
-            unsafe { libc::close(fd) };
-            return None;
-        }
+        loop {
+            let n = unsafe {
+                getattrlistbulk(
+                    fd,
+                    &alist,
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    MACOS_BUF_SIZE,
+                    FSOPT_NOFOLLOW | FSOPT_PACK_INVAL_ATTRS,
+                )
+            };
+            if n == 0 { break; }
+            if n < 0 { return None; }
 
-        // Safety: getattrlistbulk wrote `n` complete records into buf.
-        // read_unaligned is used throughout because getattrlistbulk packs
-        // attributes without alignment padding.
-        let mut ptr = buf.as_ptr();
+            // Safety: getattrlistbulk wrote `n` complete records into buf.
+            // read_unaligned is used throughout because getattrlistbulk packs
+            // attributes without alignment padding.
+            let mut ptr = buf.as_ptr();
 
-        for _ in 0..n {
-            let record_start = ptr;
+            for _ in 0..n {
+                let record_start = ptr;
 
-            // ── Fixed-size header ──────────────────────────────────────────
-            // u32: total record length (covers fixed fields + variable name data).
-            let total_len = unsafe { (ptr as *const u32).read_unaligned() } as usize;
-            ptr = unsafe { ptr.add(4) };
+                let total_len = unsafe { (ptr as *const u32).read_unaligned() } as usize;
+                ptr = unsafe { ptr.add(4) };
+                // attribute_set_t: 5 × u32 = 20 bytes — skipped (PACK_INVAL_ATTRS
+                // guarantees all requested attrs are present in every record).
+                ptr = unsafe { ptr.add(20) };
 
-            // attribute_set_t: 5 × u32 = 20 bytes. Skipped — PACK_INVAL_ATTRS
-            // guarantees all requested attrs are present in every record.
-            ptr = unsafe { ptr.add(20) };
+                // attrreference_t NAME: i32 dataoffset (from this field) + u32 length.
+                let name_ref_ptr = ptr;
+                let name_offset  = unsafe { (ptr as *const i32).read_unaligned() };
+                let name_len     = unsafe { (ptr.add(4) as *const u32).read_unaligned() } as usize;
+                ptr = unsafe { ptr.add(8) };
 
-            // attrreference_t NAME: i32 dataoffset (from this field) + u32 length.
-            let name_ref_ptr = ptr;
-            let name_offset  = unsafe { (ptr as *const i32).read_unaligned() };
-            let name_len     = unsafe { (ptr.add(4) as *const u32).read_unaligned() } as usize;
-            ptr = unsafe { ptr.add(8) };
+                let devid = unsafe { (ptr as *const i32).read_unaligned() };
+                ptr = unsafe { ptr.add(4) };
+                let objtype = unsafe { (ptr as *const u32).read_unaligned() };
+                ptr = unsafe { ptr.add(4) };
+                let tv_sec = unsafe { (ptr as *const i64).read_unaligned() };
+                ptr = unsafe { ptr.add(16) };
+                let fileid = unsafe { (ptr as *const u64).read_unaligned() };
+                ptr = unsafe { ptr.add(8) };
+                let nlink = unsafe { (ptr as *const u32).read_unaligned() };
+                ptr = unsafe { ptr.add(4) };
+                let allocsize = unsafe { (ptr as *const i64).read_unaligned() };
 
-            // dev_t DEVID (bit 1) — i32 on macOS.
-            let devid = unsafe { (ptr as *const i32).read_unaligned() };
-            ptr = unsafe { ptr.add(4) };
+                // name_offset is relative to name_ref_ptr; name_len includes '\0'.
+                let name_data = unsafe { name_ref_ptr.offset(name_offset as isize) };
+                let name_byte_len = if name_len > 0 { name_len - 1 } else { 0 };
+                let name_bytes = unsafe { std::slice::from_raw_parts(name_data, name_byte_len) };
+                // APFS/HFS+ guarantees UTF-8 filenames; lossy is lossless in practice.
+                let name = String::from_utf8_lossy(name_bytes).into_owned();
 
-            // u_int32_t OBJTYPE (bit 3).
-            let objtype = unsafe { (ptr as *const u32).read_unaligned() };
-            ptr = unsafe { ptr.add(4) };
+                let is_dir = objtype == VDIR;
+                let size = if is_dir { 0 } else { allocsize.max(0) as u64 };
 
-            // struct timespec MODTIME (bit 10): tv_sec i64 + tv_nsec i64 = 16 B.
-            let tv_sec = unsafe { (ptr as *const i64).read_unaligned() };
-            ptr = unsafe { ptr.add(16) };
+                if !name.is_empty() {
+                    result.push((name, RawMeta {
+                        size,
+                        mtime: tv_sec,
+                        is_dir,
+                        dev: devid as u32 as u64, // dev_t is i32; zero-extend via u32
+                        ino: fileid,
+                        nlink,
+                        is_reparse: false,
+                    }));
+                }
 
-            // u_int64_t FILEID (bit 25).
-            let fileid = unsafe { (ptr as *const u64).read_unaligned() };
-            ptr = unsafe { ptr.add(8) };
-
-            // ── File attrs (fileattr group, bit order) ────────────────────
-            // u_int32_t LINKCOUNT (file bit 0) — 0 for dirs with PACK_INVAL.
-            let nlink = unsafe { (ptr as *const u32).read_unaligned() };
-            ptr = unsafe { ptr.add(4) };
-
-            // off_t ALLOCSIZE (file bit 2) — 0 for dirs with PACK_INVAL.
-            let allocsize = unsafe { (ptr as *const i64).read_unaligned() };
-
-            // ── Variable-length name ──────────────────────────────────────
-            // name_offset is relative to name_ref_ptr; attr_length includes '\0'.
-            let name_data = unsafe { name_ref_ptr.offset(name_offset as isize) };
-            let name_byte_len = if name_len > 0 { name_len - 1 } else { 0 };
-            let name_bytes = unsafe { std::slice::from_raw_parts(name_data, name_byte_len) };
-            // APFS/HFS+ guarantees UTF-8 filenames; lossy is lossless in practice.
-            let name = String::from_utf8_lossy(name_bytes).into_owned();
-
-            let is_dir = objtype == VDIR;
-            // Files: allocated blocks × 512 (off_t = signed, but always ≥ 0).
-            // Dirs: 0 — their size comes from bottom-up child aggregation.
-            let size = if is_dir { 0 } else { allocsize.max(0) as u64 };
-
-            if !name.is_empty() {
-                result.push((name, RawMeta {
-                    size,
-                    mtime: tv_sec,
-                    is_dir,
-                    dev: devid as u32 as u64, // dev_t is i32; zero-extend via u32
-                    ino: fileid,
-                    nlink,
-                    is_reparse: false, // macOS: getattrlistbulk never follows symlinks
-                }));
+                ptr = unsafe { record_start.add(total_len) };
             }
-
-            // Advance to the next record using the authoritative total_len.
-            ptr = unsafe { record_start.add(total_len) };
         }
-    }
 
-    unsafe { libc::close(fd) };
-    Some(result)
+        Some(result)
+    })
 }
 
 // ── Windows implementation ────────────────────────────────────────────────────
+
+// 64 KB reused per rayon worker thread — avoids per-call malloc churn.
+#[cfg(target_os = "windows")]
+const WIN_BUF_SIZE: usize = 64 * 1024;
+
+#[cfg(target_os = "windows")]
+thread_local! {
+    static WIN_BUF: std::cell::RefCell<Vec<u8>> =
+        std::cell::RefCell::new(vec![0u8; WIN_BUF_SIZE]);
+}
 
 #[cfg(target_os = "windows")]
 pub fn bulk_dir_meta(dir: &Path) -> Option<Vec<(String, RawMeta)>> {
@@ -244,90 +250,94 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<Vec<(String, RawMeta)>> {
     let ok = unsafe { GetFileInformationByHandle(handle, &mut info) };
     let dev = if ok != 0 { info.dwVolumeSerialNumber as u64 } else { 0u64 };
 
-    // ── Buffer for bulk enumeration ────────────────────────────────────────
-    // 64 KB is enough for ~200–400 typical entries per call; the API fills as
-    // many complete records as fit and we loop until ERROR_NO_MORE_FILES.
-    const BUF_SIZE: usize = 64 * 1024;
-    let mut buf = vec![0u8; BUF_SIZE];
-    let mut result: Vec<(String, RawMeta)> = Vec::new();
-
+    // ── Bulk enumeration using the thread-local buffer ─────────────────────
     // FILETIME epoch offset: 100-ns ticks from 1601-01-01 to 1970-01-01.
     const FILETIME_TO_UNIX_SECS: i64 = 11_644_473_600i64;
 
-    loop {
-        let ok = unsafe {
-            GetFileInformationByHandleEx(
-                handle,
-                FileIdBothDirectoryInfo,
-                buf.as_mut_ptr() as *mut _,
-                BUF_SIZE as u32,
-            )
-        };
-        if ok == 0 {
-            // ERROR_NO_MORE_FILES means we've seen everything.
-            if unsafe { GetLastError() } == ERROR_NO_MORE_FILES { break; }
-            // Any other error (e.g. ERROR_MORE_DATA if a record doesn't fit the
-            // buffer) — return None so the caller can fall back to readdir_meta
-            // rather than silently returning a truncated child list.
-            unsafe { CloseHandle(handle) };
-            return None;
-        }
+    // The closure returns None on mid-enumeration error; CloseHandle is always
+    // called after it regardless of which path exits the closure.
+    let result = WIN_BUF.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let mut result: Vec<(String, RawMeta)> = Vec::new();
 
-        // Walk the chain of FILE_ID_BOTH_DIR_INFO records in the buffer.
-        // Each record's NextEntryOffset gives the byte distance to the next;
-        // 0 means this is the last record in this buffer fill.
-        let mut offset = 0usize;
         loop {
-            // Safety: buf is BUF_SIZE bytes; offset advances by NextEntryOffset
-            // which is set by the OS and guaranteed to keep records in-bounds.
-            let rec_ptr = unsafe { buf.as_ptr().add(offset) as *const FILE_ID_BOTH_DIR_INFO };
-            let rec = unsafe { &*rec_ptr };
-
-            let next = rec.NextEntryOffset as usize;
-
-            // FILE_ID_BOTH_DIR_INFO::FileName is a flexible array member;
-            // FileNameLength is in bytes (UTF-16 units × 2).
-            let name_len_chars = rec.FileNameLength as usize / 2;
-            let name_ptr = rec.FileName.as_ptr();
-            // Safety: name_ptr points into buf which is live for this loop body.
-            let name_wide = unsafe { std::slice::from_raw_parts(name_ptr, name_len_chars) };
-            let name = String::from_utf16_lossy(name_wide);
-
-            // Skip the mandatory "." and ".." entries that Win32 always includes.
-            if name != "." && name != ".." && !name.is_empty() {
-                let attrs = rec.FileAttributes;
-                let is_dir     = attrs & FILE_ATTRIBUTE_DIRECTORY != 0;
-                let is_reparse = attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0;
-
-                // AllocationSize: i64 (LARGE_INTEGER). 0 for dirs.
-                let alloc = rec.AllocationSize;
-                let size  = if is_dir { 0 } else { alloc.max(0) as u64 };
-
-                // LastWriteTime: FILETIME stored as i64 (100-ns ticks since 1601).
-                let ft   = rec.LastWriteTime;
-                let mtime = (ft / 10_000_000) - FILETIME_TO_UNIX_SECS;
-
-                // FileId: i64 unique file ID within the volume.
-                let ino = rec.FileId as u64;
-
-                result.push((name, RawMeta {
-                    size,
-                    mtime,
-                    is_dir,
-                    dev,
-                    ino,
-                    nlink: 1, // Not available in FileIdBothDirectoryInfo
-                    is_reparse,
-                }));
+            let ok = unsafe {
+                GetFileInformationByHandleEx(
+                    handle,
+                    FileIdBothDirectoryInfo,
+                    buf.as_mut_ptr() as *mut _,
+                    WIN_BUF_SIZE as u32,
+                )
+            };
+            if ok == 0 {
+                // ERROR_NO_MORE_FILES means we've seen everything.
+                if unsafe { GetLastError() } == ERROR_NO_MORE_FILES { break; }
+                // Any other error (e.g. ERROR_MORE_DATA if a record doesn't fit the
+                // buffer) — return None so the caller can fall back to readdir_meta
+                // rather than silently returning a truncated child list.
+                return None;
             }
 
-            if next == 0 { break; }
-            offset += next;
+            // Walk the chain of FILE_ID_BOTH_DIR_INFO records in the buffer.
+            // Each record's NextEntryOffset gives the byte distance to the next;
+            // 0 means this is the last record in this buffer fill.
+            let mut offset = 0usize;
+            loop {
+                // Safety: buf is WIN_BUF_SIZE bytes; offset advances by NextEntryOffset
+                // which is set by the OS and guaranteed to keep records in-bounds.
+                let rec_ptr = unsafe {
+                    buf.as_ptr().add(offset) as *const FILE_ID_BOTH_DIR_INFO
+                };
+                let rec = unsafe { &*rec_ptr };
+
+                let next = rec.NextEntryOffset as usize;
+
+                // FILE_ID_BOTH_DIR_INFO::FileName is a flexible array member;
+                // FileNameLength is in bytes (UTF-16 units × 2).
+                let name_len_chars = rec.FileNameLength as usize / 2;
+                let name_ptr = rec.FileName.as_ptr();
+                // Safety: name_ptr points into buf which is live for this loop body.
+                let name_wide = unsafe { std::slice::from_raw_parts(name_ptr, name_len_chars) };
+                let name = String::from_utf16_lossy(name_wide);
+
+                // Skip the mandatory "." and ".." entries that Win32 always includes.
+                if name != "." && name != ".." && !name.is_empty() {
+                    let attrs = rec.FileAttributes;
+                    let is_dir     = attrs & FILE_ATTRIBUTE_DIRECTORY != 0;
+                    let is_reparse = attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+
+                    // AllocationSize: i64 (LARGE_INTEGER). 0 for dirs.
+                    let alloc = rec.AllocationSize;
+                    let size  = if is_dir { 0 } else { alloc.max(0) as u64 };
+
+                    // LastWriteTime: FILETIME stored as i64 (100-ns ticks since 1601).
+                    let ft    = rec.LastWriteTime;
+                    let mtime = (ft / 10_000_000) - FILETIME_TO_UNIX_SECS;
+
+                    // FileId: i64 unique file ID within the volume.
+                    let ino = rec.FileId as u64;
+
+                    result.push((name, RawMeta {
+                        size,
+                        mtime,
+                        is_dir,
+                        dev,
+                        ino,
+                        nlink: 1, // Not available in FileIdBothDirectoryInfo
+                        is_reparse,
+                    }));
+                }
+
+                if next == 0 { break; }
+                offset += next;
+            }
         }
-    }
+
+        Some(result)
+    });
 
     unsafe { CloseHandle(handle) };
-    Some(result)
+    result
 }
 
 // ── Non-macOS, non-Windows stub ───────────────────────────────────────────────
