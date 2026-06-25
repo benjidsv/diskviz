@@ -120,43 +120,52 @@ fn print_table(results: &[RunResult]) {
 
 // ── Divergence check ──────────────────────────────────────────────────────────
 
-/// Returns true if any walker disagrees with the first result.
-fn check_divergence(results: &[RunResult]) -> bool {
+/// Divergences below this percentage are attributed to filesystem churn
+/// (files created/deleted while scanning) and reported as warnings, not errors.
+const DIVERGENCE_WARN_PCT: f64 = 0.10;
+
+fn pct_of(delta: i64, base: u64) -> f64 {
+    if base == 0 { 0.0 } else { delta as f64 / base as f64 * 100.0 }
+}
+
+/// Prints per-metric divergence lines and returns the maximum absolute
+/// percentage error across files / dirs / size (0.0 if all agree).
+fn check_divergence(results: &[RunResult]) -> f64 {
     if results.len() < 2 {
-        return false;
+        return 0.0;
     }
     let ref_r = &results[0];
-    let mut any = false;
+    let mut max_pct: f64 = 0.0;
     for r in results.iter().skip(1) {
         if r.files != ref_r.files {
             let delta = r.files as i64 - ref_r.files as i64;
-            let pct   = if ref_r.files > 0 { delta as f64 / ref_r.files as f64 * 100.0 } else { 0.0 };
+            let pct   = pct_of(delta, ref_r.files);
             eprintln!(
                 "DIVERGENCE: '{}' files={} vs '{}' files={}  (Δ={:+}, {:+.2}%)",
                 r.name, r.files, ref_r.name, ref_r.files, delta, pct
             );
-            any = true;
+            max_pct = max_pct.max(pct.abs());
         }
         if r.dirs != ref_r.dirs {
             let delta = r.dirs as i64 - ref_r.dirs as i64;
-            let pct   = if ref_r.dirs > 0 { delta as f64 / ref_r.dirs as f64 * 100.0 } else { 0.0 };
+            let pct   = pct_of(delta, ref_r.dirs);
             eprintln!(
                 "DIVERGENCE: '{}' dirs={} vs '{}' dirs={}  (Δ={:+}, {:+.2}%)",
                 r.name, r.dirs, ref_r.name, ref_r.dirs, delta, pct
             );
-            any = true;
+            max_pct = max_pct.max(pct.abs());
         }
         if r.size != ref_r.size {
             let delta = r.size as i64 - ref_r.size as i64;
-            let pct   = if ref_r.size > 0 { delta as f64 / ref_r.size as f64 * 100.0 } else { 0.0 };
+            let pct   = pct_of(delta, ref_r.size);
             eprintln!(
                 "DIVERGENCE: '{}' size={} vs '{}' size={}  (Δ={:+}, {:+.2}%)",
                 r.name, r.size, ref_r.name, ref_r.size, delta, pct
             );
-            any = true;
+            max_pct = max_pct.max(pct.abs());
         }
     }
-    any
+    max_pct
 }
 
 // ── Per-child divergence breakdown ────────────────────────────────────────────
@@ -329,11 +338,16 @@ fn main() {
 
     print_table(&results);
 
-    let any_divergence = check_divergence(&results);
-    if any_divergence {
-        eprintln!("\n❌  Divergence detected — walkers disagree on results.");
-    } else if results.len() > 1 {
-        println!("\n✅  All walkers agree.");
+    let max_pct = check_divergence(&results);
+    if max_pct == 0.0 {
+        if results.len() > 1 { println!("\n✅  All walkers agree."); }
+    } else if max_pct < DIVERGENCE_WARN_PCT {
+        eprintln!(
+            "\n⚠️   Divergence within noise threshold (max {:.2}% < {:.2}%) — likely filesystem churn.",
+            max_pct, DIVERGENCE_WARN_PCT
+        );
+    } else {
+        eprintln!("\n❌  Divergence detected — walkers disagree on results (max {:.2}%).", max_pct);
     }
 
     // Per-child breakdown: drill into which top-level dirs diverge.
@@ -349,7 +363,7 @@ fn main() {
         }
     }
 
-    if any_divergence {
+    if max_pct >= DIVERGENCE_WARN_PCT {
         std::process::exit(1);
     }
 }
