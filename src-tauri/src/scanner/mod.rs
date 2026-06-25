@@ -1,13 +1,19 @@
 //! Fast parallel filesystem scanner.
 //!
-//! Walks a directory tree in parallel (via `jwalk`) and stores the result in a
-//! compact index-based arena (`Vec<Node>`). Directory sizes are aggregated
-//! bottom-up in a single reverse pass. Subtree extension/age stats are also
-//! precomputed bottom-up (Phase A) so navigation lookups are O(1). The
-//! child-sort pass is parallelised via rayon (Phase B). On macOS, per-entry
-//! lstat is replaced by one `getattrlistbulk` syscall per directory (Phase C).
+//! Walks a directory tree in parallel and stores the result in a compact
+//! index-based arena (`Vec<Node>`). Directory sizes are aggregated bottom-up in
+//! a single reverse pass. Subtree extension/age stats are precomputed bottom-up
+//! (Phase A) so navigation lookups are O(1). Children are sorted by size in
+//! parallel via rayon (Phase B).
+//!
+//! On macOS (unless `DISKVIZ_NO_BULK=1` is set), `walk_macos` replaces jwalk
+//! entirely, using `getattrlistbulk` as the sole enumeration primitive — each
+//! directory is read once rather than twice. On all other platforms jwalk is
+//! used with per-entry `metadata()` calls.
 
 pub mod dirmeta;
+#[cfg(target_os = "macos")]
+mod walk_macos;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -88,6 +94,9 @@ pub struct ScanTree {
     pub ext_names: Vec<String>,
     /// Precomputed subtree stats keyed by directory node index.
     pub dir_stats: HashMap<u32, DirStats>,
+    /// Unix-second timestamp captured at scan time. Phase A and `remove_subtree`
+    /// both use this clock so age-bucket assignments stay consistent.
+    pub scan_now_secs: i64,
 }
 
 impl ScanTree {
@@ -126,11 +135,8 @@ impl ScanTree {
         } else {
             let ext = extension_of(&node.name);
             let ext_id = self.ext_names.iter().position(|e| e == &ext).map(|i| i as u32);
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            let age_days = (now - node.mtime).max(0) / SECS_PER_DAY;
+            // Use the scan-time clock so the bucket matches what Phase A assigned.
+            let age_days = (self.scan_now_secs - node.mtime).max(0) / SECS_PER_DAY;
             let bucket = age_bucket(age_days);
             let mut ds = DirStats { age_hist: [0u32; 9], exts: Vec::new() };
             ds.age_hist[bucket] = 1;
@@ -207,6 +213,123 @@ pub struct Progress {
     pub percent: f64,
 }
 
+// ── finalize() ────────────────────────────────────────────────────────────────
+//
+// Shared tail for both the macOS walker and the jwalk path: bottom-up size
+// aggregation, Phase A extension/age stats, Phase B parallel child-sort, and
+// ScanTree assembly.
+
+fn finalize(
+    mut nodes:     Vec<Node>,
+    root_index:    u32,
+    root_path:     PathBuf,
+    start:         Instant,
+    scan_now_secs: i64,
+) -> ScanTree {
+    // ── Bottom-up size aggregation ────────────────────────────────────────────
+    for i in (0..nodes.len()).rev() {
+        if let Some(p) = nodes[i].parent {
+            let s = nodes[i].size;
+            let (fc, dc, is_dir) = (nodes[i].file_count, nodes[i].dir_count, nodes[i].is_dir);
+            let parent = &mut nodes[p as usize];
+            parent.size       += s;
+            parent.file_count += fc + if is_dir { 0 } else { 1 };
+            parent.dir_count  += dc + if is_dir { 1 } else { 0 };
+        }
+    }
+
+    // ── Phase A: bottom-up stats reverse pass ─────────────────────────────────
+    // Build extension interner + per-dir accumulator. Same child > parent index
+    // invariant as the size pass: processing in reverse finishes every child
+    // before its parent is reached.
+    struct DirAccum {
+        exts:     HashMap<u32, u64>,
+        age_hist: [u64; 9],
+    }
+
+    let mut ext_map:   HashMap<String, u32> = HashMap::new();
+    let mut ext_names: Vec<String>          = Vec::new();
+    // Only dir nodes get Some; files stay None.
+    let mut accum: Vec<Option<DirAccum>> = nodes
+        .iter()
+        .map(|n| if n.is_dir {
+            Some(DirAccum { exts: HashMap::new(), age_hist: [0; 9] })
+        } else {
+            None
+        })
+        .collect();
+
+    for i in (0..nodes.len()).rev() {
+        let p_opt = nodes[i].parent;
+        if !nodes[i].is_dir {
+            // File: fold ext + age into parent directory's accumulator.
+            let ext_str = extension_of(&nodes[i].name);
+            let n_ext   = ext_names.len() as u32;
+            let ext_id  = *ext_map.entry(ext_str.clone()).or_insert_with(|| {
+                ext_names.push(ext_str);
+                n_ext
+            });
+            let age_days = (scan_now_secs - nodes[i].mtime).max(0) / SECS_PER_DAY;
+            let bucket   = age_bucket(age_days);
+            let sz       = nodes[i].size;
+            if let Some(p) = p_opt {
+                if let Some(Some(pa)) = accum.get_mut(p as usize) {
+                    *pa.exts.entry(ext_id).or_insert(0) += sz;
+                    pa.age_hist[bucket] += 1;
+                }
+            }
+        } else if let Some(p) = p_opt {
+            // Dir: merge its completed accum into parent. p < i guaranteed,
+            // so split_at_mut yields non-overlapping borrows.
+            let (left, right) = accum.split_at_mut(i);
+            if let (Some(child_a), Some(Some(parent_a))) =
+                (right[0].as_ref(), left.get_mut(p as usize))
+            {
+                for (&eid, &sz) in &child_a.exts {
+                    *parent_a.exts.entry(eid).or_insert(0) += sz;
+                }
+                for b in 0..9 { parent_a.age_hist[b] += child_a.age_hist[b]; }
+            }
+        }
+    }
+
+    // Convert accumulators to sorted DirStats.
+    let mut dir_stats: HashMap<u32, DirStats> = HashMap::new();
+    for (i, acc_opt) in accum.into_iter().enumerate() {
+        if let Some(acc) = acc_opt {
+            let mut exts: Vec<(u32, u64)> = acc.exts.into_iter().collect();
+            exts.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+            dir_stats.insert(i as u32, DirStats {
+                age_hist: acc.age_hist.map(|x| x as u32),
+                exts,
+            });
+        }
+    }
+
+    // ── Phase B: parallel child-sort ─────────────────────────────────────────
+    let sizes: Vec<u64> = nodes.iter().map(|n| n.size).collect();
+    nodes.par_iter_mut().for_each(|n| {
+        n.children.sort_unstable_by(|&a, &b| sizes[b as usize].cmp(&sizes[a as usize]));
+    });
+
+    let total_size  = nodes[root_index as usize].size;
+    let total_files = nodes[root_index as usize].file_count;
+    let total_dirs  = nodes[root_index as usize].dir_count;
+
+    ScanTree {
+        nodes,
+        root: root_index,
+        root_path,
+        total_size,
+        total_files,
+        total_dirs,
+        scan_duration_ms: start.elapsed().as_millis() as u64,
+        ext_names,
+        dir_stats,
+        scan_now_secs,
+    }
+}
+
 // ── scan() ────────────────────────────────────────────────────────────────────
 
 pub fn scan<F: FnMut(Progress)>(
@@ -217,6 +340,24 @@ pub fn scan<F: FnMut(Progress)>(
     let start = Instant::now();
     let denom = volume_used_bytes(&root).unwrap_or(0);
 
+    // Capture the reference clock once; both Phase A (in finalize) and
+    // remove_subtree use this same value so age buckets stay consistent.
+    let scan_now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    // ── macOS fast path: getattrlistbulk as primary enumeration ──────────────
+    // Replaces jwalk entirely on macOS (unless DISKVIZ_NO_BULK=1 is set, which
+    // forces the jwalk path below for A/B benchmarking).
+    #[cfg(target_os = "macos")]
+    if std::env::var_os("DISKVIZ_NO_BULK").is_none() {
+        let (nodes, root_index) =
+            walk_macos::walk(root.clone(), Arc::clone(&cancel), denom, &mut on_progress)?;
+        return Ok(finalize(nodes, root_index, root, start, scan_now_secs));
+    }
+
+    // ── jwalk path (non-macOS or DISKVIZ_NO_BULK=1) ───────────────────────────
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8)
@@ -226,47 +367,22 @@ pub fn scan<F: FnMut(Progress)>(
     #[cfg(unix)]
     let visited: dashmap::DashSet<(u64, u64)> = dashmap::DashSet::new();
 
-    let use_bulk = std::env::var_os("DISKVIZ_NO_BULK").is_none();
-
     let cancel_walk = cancel.clone();
     let walk = WalkDirGeneric::<((), EntryMeta)>::new(&root)
         .skip_hidden(false)
         .follow_links(false)
         .parallelism(jwalk::Parallelism::RayonNewPool(threads))
-        .process_read_dir(move |_depth, path, _read_dir_state, children| {
+        .process_read_dir(move |_depth, _path, _read_dir_state, children| {
             if cancel_walk.load(Ordering::Relaxed) {
                 children.clear();
                 return;
             }
-
-            // Phase C: one bulk syscall per directory on macOS.
-            let bulk: Option<std::collections::HashMap<std::ffi::OsString, dirmeta::RawMeta>> =
-                if use_bulk { dirmeta::bulk_dir_meta(path) } else { None };
 
             for entry in children.iter_mut().flatten() {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::MetadataExt;
 
-                    if let Some(ref b) = bulk {
-                        if let Some(rm) = b.get(entry.file_name()) {
-                            let is_dir = rm.is_dir;
-                            let mtime  = rm.mtime;
-                            let size   = rm.size;
-
-                            if is_dir || rm.nlink > 1 {
-                                if !visited.insert((rm.dev, rm.ino)) {
-                                    entry.client_state = EntryMeta { size: 0, mtime };
-                                    if is_dir { entry.read_children_path = None; }
-                                    continue;
-                                }
-                            }
-                            entry.client_state = EntryMeta { size, mtime };
-                            continue;
-                        }
-                    }
-
-                    // Per-entry fallback (non-macOS, DISKVIZ_NO_BULK, or lookup miss).
                     if let Ok(meta) = entry.metadata() {
                         let mtime = meta
                             .modified()
@@ -379,108 +495,7 @@ pub fn scan<F: FnMut(Progress)>(
         std::io::Error::new(std::io::ErrorKind::NotFound, "root could not be scanned")
     })?;
 
-    // ── Bottom-up size aggregation ────────────────────────────────────────────
-    for i in (0..nodes.len()).rev() {
-        if let Some(p) = nodes[i].parent {
-            let s = nodes[i].size;
-            let (fc, dc, is_dir) = (nodes[i].file_count, nodes[i].dir_count, nodes[i].is_dir);
-            let parent = &mut nodes[p as usize];
-            parent.size       += s;
-            parent.file_count += fc + if is_dir { 0 } else { 1 };
-            parent.dir_count  += dc + if is_dir { 1 } else { 0 };
-        }
-    }
-
-    // ── Phase A: bottom-up stats reverse pass ─────────────────────────────────
-    // Build extension interner + per-dir accumulator. Same child > parent index
-    // invariant as the size pass: processing in reverse finishes every child
-    // before its parent is reached.
-    let now_secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-
-    struct DirAccum {
-        exts: HashMap<u32, u64>,
-        age_hist: [u64; 9],
-    }
-
-    let mut ext_map: HashMap<String, u32> = HashMap::new();
-    let mut ext_names: Vec<String> = Vec::new();
-    // Only dir nodes get Some; files stay None.
-    let mut accum: Vec<Option<DirAccum>> = nodes
-        .iter()
-        .map(|n| if n.is_dir { Some(DirAccum { exts: HashMap::new(), age_hist: [0; 9] }) } else { None })
-        .collect();
-
-    for i in (0..nodes.len()).rev() {
-        let p_opt = nodes[i].parent;
-        if !nodes[i].is_dir {
-            // File: fold ext + age into parent directory's accumulator.
-            let ext_str = extension_of(&nodes[i].name);
-            let n_ext = ext_names.len() as u32;
-            let ext_id = *ext_map.entry(ext_str.clone()).or_insert_with(|| {
-                ext_names.push(ext_str);
-                n_ext
-            });
-            let age_days = (now_secs - nodes[i].mtime).max(0) / SECS_PER_DAY;
-            let bucket   = age_bucket(age_days);
-            let sz       = nodes[i].size;
-            if let Some(p) = p_opt {
-                if let Some(Some(pa)) = accum.get_mut(p as usize) {
-                    *pa.exts.entry(ext_id).or_insert(0) += sz;
-                    pa.age_hist[bucket] += 1;
-                }
-            }
-        } else if let Some(p) = p_opt {
-            // Dir: merge its completed accum into parent. p < i guaranteed,
-            // so split_at_mut yields non-overlapping borrows.
-            let (left, right) = accum.split_at_mut(i);
-            if let (Some(child_a), Some(Some(parent_a))) =
-                (right[0].as_ref(), left.get_mut(p as usize))
-            {
-                for (&eid, &sz) in &child_a.exts {
-                    *parent_a.exts.entry(eid).or_insert(0) += sz;
-                }
-                for b in 0..9 { parent_a.age_hist[b] += child_a.age_hist[b]; }
-            }
-        }
-    }
-
-    // Finalize: convert accumulators to sorted DirStats.
-    let mut dir_stats: HashMap<u32, DirStats> = HashMap::new();
-    for (i, acc_opt) in accum.into_iter().enumerate() {
-        if let Some(acc) = acc_opt {
-            let mut exts: Vec<(u32, u64)> = acc.exts.into_iter().collect();
-            exts.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-            dir_stats.insert(i as u32, DirStats {
-                age_hist: acc.age_hist.map(|x| x as u32),
-                exts,
-            });
-        }
-    }
-
-    // ── Phase B: parallel child-sort ─────────────────────────────────────────
-    let sizes: Vec<u64> = nodes.iter().map(|n| n.size).collect();
-    nodes.par_iter_mut().for_each(|n| {
-        n.children.sort_unstable_by(|&a, &b| sizes[b as usize].cmp(&sizes[a as usize]));
-    });
-
-    let total_size  = nodes[root_index as usize].size;
-    let total_files = nodes[root_index as usize].file_count;
-    let total_dirs  = nodes[root_index as usize].dir_count;
-
-    Ok(ScanTree {
-        nodes,
-        root: root_index,
-        root_path: root,
-        total_size,
-        total_files,
-        total_dirs,
-        scan_duration_ms: start.elapsed().as_millis() as u64,
-        ext_names,
-        dir_stats,
-    })
+    Ok(finalize(nodes, root_index, root, start, scan_now_secs))
 }
 
 // ── volume_used_bytes ─────────────────────────────────────────────────────────
@@ -544,6 +559,90 @@ mod tests {
         let bin_id = tree.ext_names.iter().position(|e| e == "bin")
             .expect(".bin interned") as u32;
         assert!(root_stats.exts.iter().any(|&(eid, _)| eid == bin_id), ".bin in exts");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `remove_subtree` must decrement the exact age bucket that Phase A used
+    /// (scan-time clock), not a freshly computed "now" bucket.
+    #[test]
+    fn remove_subtree_bucket_consistency() {
+        let root = std::env::temp_dir()
+            .join(format!("diskviz_rm_bucket_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("target.bin"), vec![0u8; 4096]).unwrap();
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut tree = scan(root.clone(), cancel, |_| {}).unwrap();
+
+        let root_node = &tree.nodes[tree.root as usize];
+        // Find the file node index.
+        let file_idx = *root_node.children.iter()
+            .find(|&&c| !tree.nodes[c as usize].is_dir)
+            .expect("file child exists");
+
+        // Record the histogram before deletion.
+        let hist_before = tree.dir_stats.get(&tree.root)
+            .expect("root dir_stats")
+            .age_hist;
+
+        // Delete the file from the arena (does NOT touch the filesystem).
+        tree.remove_subtree(file_idx);
+
+        let hist_after = tree.dir_stats.get(&tree.root)
+            .expect("root dir_stats still present")
+            .age_hist;
+
+        // Exactly one bucket must have decremented by 1; the rest stay the same.
+        let diffs: Vec<i64> = hist_before.iter()
+            .zip(hist_after.iter())
+            .map(|(&b, &a)| b as i64 - a as i64)
+            .collect();
+        let decremented: Vec<_> = diffs.iter().enumerate().filter(|&(_, &d)| d != 0).collect();
+
+        assert_eq!(decremented.len(), 1, "exactly one bucket changed");
+        assert_eq!(decremented[0].1, &1i64, "bucket decremented by 1");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// macOS parity: scanning with DISKVIZ_NO_BULK (jwalk path) and without
+    /// (walk_macos path) should yield the same total sizes, counts, and
+    /// dir_stats histograms.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_walker_parity() {
+        let root = std::env::temp_dir()
+            .join(format!("diskviz_parity_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("sub/deep")).unwrap();
+        fs::write(root.join("a.rs"),           vec![0u8; 4096]).unwrap();
+        fs::write(root.join("sub/b.toml"),     vec![0u8; 4096]).unwrap();
+        fs::write(root.join("sub/c.toml"),     vec![0u8; 4096]).unwrap();
+        fs::write(root.join("sub/deep/d.rs"),  vec![0u8; 4096]).unwrap();
+        fs::write(root.join(".hidden"),        vec![0u8; 4096]).unwrap();
+
+        let cancel1 = Arc::new(AtomicBool::new(false));
+        let cancel2 = Arc::new(AtomicBool::new(false));
+
+        // Walk via walk_macos (DISKVIZ_NO_BULK must not be set).
+        std::env::remove_var("DISKVIZ_NO_BULK");
+        let fast = scan(root.clone(), cancel1, |_| {}).unwrap();
+
+        // Walk via jwalk fallback.
+        std::env::set_var("DISKVIZ_NO_BULK", "1");
+        let slow = scan(root.clone(), cancel2, |_| {}).unwrap();
+        std::env::remove_var("DISKVIZ_NO_BULK");
+
+        assert_eq!(fast.total_files, slow.total_files, "file count");
+        assert_eq!(fast.total_dirs,  slow.total_dirs,  "dir count");
+        assert_eq!(fast.total_size,  slow.total_size,  "total size");
+
+        // Root histogram totals must match.
+        let fh: u32 = fast.dir_stats.get(&fast.root).unwrap().age_hist.iter().sum();
+        let sh: u32 = slow.dir_stats.get(&slow.root).unwrap().age_hist.iter().sum();
+        assert_eq!(fh, sh, "age_hist total (file count) matches");
 
         let _ = fs::remove_dir_all(&root);
     }
