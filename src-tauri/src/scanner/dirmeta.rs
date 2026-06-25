@@ -231,7 +231,7 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
             std::ptr::null(),
             OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-            0,
+            std::ptr::null_mut(),
         )
     };
     if handle == INVALID_HANDLE_VALUE { return None; }
