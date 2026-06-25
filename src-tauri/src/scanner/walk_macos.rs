@@ -72,32 +72,31 @@ fn walk_dir(
     let mut subdir_tasks: Vec<(String, PathBuf, i64, u64, u64)> = Vec::new();
 
     for (fname, rm) in entries.into_iter() {
-        let fname_str    = fname.to_string_lossy().into_owned();
-        let is_child_hid = fname_str.starts_with('.');
+        let is_child_hid = fname.starts_with('.');
 
         if rm.is_dir {
             if !visited.insert((rm.dev, rm.ino)) {
                 // Already visited — emit as empty leaf to preserve the node in
                 // the tree (for size accounting) but don't recurse.
                 file_nodes.push(RawNode {
-                    name: fname_str, size: 0, mtime: rm.mtime,
+                    name: fname, size: 0, mtime: rm.mtime,
                     is_dir: true, is_hidden: is_child_hid, children: vec![],
                 });
             } else {
                 let subpath = path.join(&fname);
-                subdir_tasks.push((fname_str, subpath, rm.mtime, rm.dev, rm.ino));
+                subdir_tasks.push((fname, subpath, rm.mtime, rm.dev, rm.ino));
             }
         } else if rm.nlink > 1 && !visited.insert((rm.dev, rm.ino)) {
             // Hard link already counted — zero size to avoid double-counting.
             file_nodes.push(RawNode {
-                name: fname_str, size: 0, mtime: rm.mtime,
+                name: fname, size: 0, mtime: rm.mtime,
                 is_dir: false, is_hidden: is_child_hid, children: vec![],
             });
         } else {
             stats.file_count.fetch_add(1, Ordering::Relaxed);
             stats.bytes_scanned.fetch_add(rm.size, Ordering::Relaxed);
             file_nodes.push(RawNode {
-                name: fname_str, size: rm.size, mtime: rm.mtime,
+                name: fname, size: rm.size, mtime: rm.mtime,
                 is_dir: false, is_hidden: is_child_hid, children: vec![],
             });
         }
@@ -115,6 +114,7 @@ fn walk_dir(
                      visited, cancel, stats, denom, tx.clone())
         })
         .collect();
+
 
     let mut children = file_nodes;
     children.extend(subdir_nodes);

@@ -2,8 +2,6 @@
 //! `GetFileInformationByHandleEx` (Windows), or `None` (other platforms fall
 //! back to per-entry `entry.metadata()`).
 
-use std::collections::HashMap;
-use std::ffi::OsString;
 use std::path::Path;
 
 /// Metadata for a single directory entry from the bulk path.
@@ -25,10 +23,9 @@ pub struct RawMeta {
 // ── macOS implementation ──────────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
-pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
+pub fn bulk_dir_meta(dir: &Path) -> Option<Vec<(String, RawMeta)>> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::ffi::OsStringExt;
 
     let dir_cstr = CString::new(dir.as_os_str().as_bytes()).ok()?;
     let fd = unsafe { libc::open(dir_cstr.as_ptr(), libc::O_RDONLY) };
@@ -102,7 +99,7 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
     // 256 KB — sufficient for ~2 000 typical entries per call.
     const BUF_SIZE: usize = 256 * 1024;
     let mut buf = vec![0u8; BUF_SIZE];
-    let mut result: HashMap<OsString, RawMeta> = HashMap::new();
+    let mut result: Vec<(String, RawMeta)> = Vec::new();
 
     loop {
         let n = unsafe {
@@ -174,7 +171,8 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
             let name_data = unsafe { name_ref_ptr.offset(name_offset as isize) };
             let name_byte_len = if name_len > 0 { name_len - 1 } else { 0 };
             let name_bytes = unsafe { std::slice::from_raw_parts(name_data, name_byte_len) };
-            let name = OsString::from_vec(name_bytes.to_vec());
+            // APFS/HFS+ guarantees UTF-8 filenames; lossy is lossless in practice.
+            let name = String::from_utf8_lossy(name_bytes).into_owned();
 
             let is_dir = objtype == VDIR;
             // Files: allocated blocks × 512 (off_t = signed, but always ≥ 0).
@@ -182,7 +180,7 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
             let size = if is_dir { 0 } else { allocsize.max(0) as u64 };
 
             if !name.is_empty() {
-                result.insert(name, RawMeta {
+                result.push((name, RawMeta {
                     size,
                     mtime: tv_sec,
                     is_dir,
@@ -190,7 +188,7 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
                     ino: fileid,
                     nlink,
                     is_reparse: false, // macOS: getattrlistbulk never follows symlinks
-                });
+                }));
             }
 
             // Advance to the next record using the authoritative total_len.
@@ -205,9 +203,8 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
 // ── Windows implementation ────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
-pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
-    use std::ffi::OsString;
-    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+pub fn bulk_dir_meta(dir: &Path) -> Option<Vec<(String, RawMeta)>> {
+    use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{
         CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
         ERROR_NO_MORE_FILES,
@@ -252,7 +249,7 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
     // many complete records as fit and we loop until ERROR_NO_MORE_FILES.
     const BUF_SIZE: usize = 64 * 1024;
     let mut buf = vec![0u8; BUF_SIZE];
-    let mut result: HashMap<OsString, RawMeta> = HashMap::new();
+    let mut result: Vec<(String, RawMeta)> = Vec::new();
 
     // FILETIME epoch offset: 100-ns ticks from 1601-01-01 to 1970-01-01.
     const FILETIME_TO_UNIX_SECS: i64 = 11_644_473_600i64;
@@ -294,11 +291,10 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
             let name_ptr = rec.FileName.as_ptr();
             // Safety: name_ptr points into buf which is live for this loop body.
             let name_wide = unsafe { std::slice::from_raw_parts(name_ptr, name_len_chars) };
-            let name = OsString::from_wide(name_wide);
+            let name = String::from_utf16_lossy(name_wide);
 
             // Skip the mandatory "." and ".." entries that Win32 always includes.
-            let name_str = name.to_string_lossy();
-            if name_str != "." && name_str != ".." && !name_str.is_empty() {
+            if name != "." && name != ".." && !name.is_empty() {
                 let attrs = rec.FileAttributes;
                 let is_dir     = attrs & FILE_ATTRIBUTE_DIRECTORY != 0;
                 let is_reparse = attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0;
@@ -314,7 +310,7 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
                 // FileId: i64 unique file ID within the volume.
                 let ino = rec.FileId as u64;
 
-                result.insert(name, RawMeta {
+                result.push((name, RawMeta {
                     size,
                     mtime,
                     is_dir,
@@ -322,7 +318,7 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
                     ino,
                     nlink: 1, // Not available in FileIdBothDirectoryInfo
                     is_reparse,
-                });
+                }));
             }
 
             if next == 0 { break; }
@@ -337,14 +333,14 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
 // ── Non-macOS, non-Windows stub ───────────────────────────────────────────────
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub fn bulk_dir_meta(_dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
+pub fn bulk_dir_meta(_dir: &Path) -> Option<Vec<(String, RawMeta)>> {
     None
 }
 
 // ── Cross-platform readdir fallback ──────────────────────────────────────────
 
 /// Enumerate `dir` via `std::fs::read_dir` + `symlink_metadata`, returning the
-/// same `HashMap<OsString, RawMeta>` shape as `bulk_dir_meta`.
+/// same `Vec<(String, RawMeta)>` shape as `bulk_dir_meta`.
 ///
 /// This is the *fallback* path: called by both native walkers when
 /// `bulk_dir_meta` returns `None` (open-failure or mid-enumeration error),
@@ -356,14 +352,14 @@ pub fn bulk_dir_meta(_dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
 ///
 /// Returns `None` only if `read_dir` itself fails (dir is genuinely unreadable
 /// by any path, matching what jwalk would skip).
-pub fn readdir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
+pub fn readdir_meta(dir: &Path) -> Option<Vec<(String, RawMeta)>> {
     use std::time::UNIX_EPOCH;
 
     let rd = std::fs::read_dir(dir).ok()?;
-    let mut result = HashMap::new();
+    let mut result = Vec::new();
 
     for entry in rd.flatten() {
-        let name = entry.file_name();
+        let name = entry.file_name().to_string_lossy().into_owned();
         let path = entry.path();
 
         // symlink_metadata = lstat: never follows symlinks/junctions.
@@ -422,10 +418,10 @@ pub fn readdir_meta(dir: &Path) -> Option<HashMap<OsString, RawMeta>> {
         #[cfg(not(unix))]
         let (dev, ino, nlink) = (0u64, 0u64, 1u32);
 
-        result.insert(
+        result.push((
             name,
             RawMeta { size, mtime, is_dir, dev, ino, nlink, is_reparse },
-        );
+        ));
     }
 
     Some(result)
@@ -441,7 +437,6 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn dirmeta_parity() {
-        use std::ffi::OsStr;
         use std::os::unix::fs::MetadataExt;
 
         let dir = std::env::temp_dir()
@@ -455,19 +450,21 @@ mod tests {
         let result = bulk_dir_meta(&dir).expect("bulk_dir_meta should succeed on macOS");
 
         for name in ["a.txt", "b.bin"] {
-            let rm   = result.get(OsStr::new(name))
+            let rm = result.iter().find(|(n, _)| n == name)
+                .map(|(_, m)| m)
                 .unwrap_or_else(|| panic!("{name} missing from bulk result"));
             let meta = fs::symlink_metadata(dir.join(name)).unwrap();
 
             assert!(!rm.is_dir, "{name}: should not be dir");
-            assert_eq!(rm.ino, meta.ino(),        "{name}: inode mismatch");
+            assert_eq!(rm.ino, meta.ino(),           "{name}: inode mismatch");
             assert_eq!(rm.size, meta.blocks() * 512, "{name}: size mismatch");
             assert!((rm.mtime - meta.mtime()).abs() <= 1, "{name}: mtime mismatch");
             assert!(!rm.is_reparse, "{name}: regular file is not a reparse point");
         }
 
         // Directory entry
-        let sub_rm   = result.get(OsStr::new("sub"))
+        let sub_rm = result.iter().find(|(n, _)| n == "sub")
+            .map(|(_, m)| m)
             .expect("sub dir missing from bulk result");
         let sub_meta = fs::symlink_metadata(dir.join("sub")).unwrap();
         assert!(sub_rm.is_dir, "sub: should be dir");
@@ -482,8 +479,6 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn dirmeta_windows_basic() {
-        use std::ffi::OsStr;
-
         let dir = std::env::temp_dir()
             .join(format!("diskviz_dirmeta_win_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -494,7 +489,8 @@ mod tests {
         let result = bulk_dir_meta(&dir)
             .expect("bulk_dir_meta should succeed on Windows");
 
-        let a = result.get(OsStr::new("a.txt"))
+        let a = result.iter().find(|(n, _)| n == "a.txt")
+            .map(|(_, m)| m)
             .expect("a.txt missing from result");
         assert!(!a.is_dir, "a.txt should not be a directory");
         assert!(a.size > 0, "a.txt should have non-zero allocated size");
@@ -502,15 +498,16 @@ mod tests {
         assert!(a.mtime > 946_684_800, "mtime should be after year 2000");
         assert!(!a.is_reparse, "a.txt is not a reparse point");
 
-        let sub = result.get(OsStr::new("sub"))
+        let sub = result.iter().find(|(n, _)| n == "sub")
+            .map(|(_, m)| m)
             .expect("sub dir missing from result");
         assert!(sub.is_dir, "sub should be a directory");
         assert_eq!(sub.size, 0, "dir size is always 0 from bulk path");
         assert!(!sub.is_reparse, "regular dir is not a reparse point");
 
         // Neither "." nor ".." should appear.
-        assert!(!result.contains_key(OsStr::new(".")),  ". must be filtered");
-        assert!(!result.contains_key(OsStr::new("..")), ".. must be filtered");
+        assert!(!result.iter().any(|(n, _)| n == "."),  ". must be filtered");
+        assert!(!result.iter().any(|(n, _)| n == ".."), ".. must be filtered");
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -521,8 +518,6 @@ mod tests {
     #[test]
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn readdir_meta_parity() {
-        use std::ffi::OsStr;
-
         let dir = std::env::temp_dir()
             .join(format!("diskviz_rdmeta_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -535,16 +530,18 @@ mod tests {
         let rdir = readdir_meta(&dir).expect("readdir_meta should succeed");
 
         // Same set of names (readdir never returns "." or "..").
-        let mut bulk_names: Vec<_> = bulk.keys().map(|k| k.to_string_lossy().into_owned()).collect();
-        let mut rdir_names: Vec<_> = rdir.keys().map(|k| k.to_string_lossy().into_owned()).collect();
+        let mut bulk_names: Vec<_> = bulk.iter().map(|(n, _)| n.clone()).collect();
+        let mut rdir_names: Vec<_> = rdir.iter().map(|(n, _)| n.clone()).collect();
         bulk_names.sort();
         rdir_names.sort();
         assert_eq!(bulk_names, rdir_names, "bulk and readdir must return same entry names");
 
         // is_dir must agree for every entry.
         for name in ["a.txt", "b.bin", "sub"] {
-            let b = bulk.get(OsStr::new(name)).unwrap_or_else(|| panic!("{name} missing from bulk"));
-            let r = rdir.get(OsStr::new(name)).unwrap_or_else(|| panic!("{name} missing from readdir"));
+            let b = bulk.iter().find(|(n, _)| n == name).map(|(_, m)| m)
+                .unwrap_or_else(|| panic!("{name} missing from bulk"));
+            let r = rdir.iter().find(|(n, _)| n == name).map(|(_, m)| m)
+                .unwrap_or_else(|| panic!("{name} missing from readdir"));
             assert_eq!(b.is_dir, r.is_dir, "{name}: is_dir mismatch between bulk and readdir");
         }
 
