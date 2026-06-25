@@ -784,6 +784,7 @@ dependencies = [
  "dashmap",
  "jwalk",
  "libc",
+ "rayon",
  "serde",
  "serde_json",
  "tauri",
