@@ -42,3 +42,8 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+[profile.release-debug]
+inherits = "release"
+debug = 2
+split-debuginfo = "off"

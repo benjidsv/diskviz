@@ -23,5 +23,11 @@ dist-ssr
 *.sln
 *.sw?
 
+# IDE
 .claude
 .vscode
+
+# Profiling
+*.trace
+profile.json.gz
+flamegraph.svg
