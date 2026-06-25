@@ -115,7 +115,6 @@ fn walk_dir(
         })
         .collect();
 
-
     let mut children = file_nodes;
     children.extend(subdir_nodes);
 
@@ -137,6 +136,17 @@ pub fn walk<F: FnMut(super::Progress)>(
     mut on_progress: F,
 ) -> io::Result<(Vec<super::Node>, u32)> {
     use std::os::unix::fs::MetadataExt;
+
+    // Raise the soft fd limit to the hard limit so getattrlistbulk can hold
+    // many directory fds open simultaneously without hitting EMFILE.
+    // On macOS the hard limit is typically 10240.
+    unsafe {
+        let mut rl: libc::rlimit = std::mem::zeroed();
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) == 0 && rl.rlim_cur < rl.rlim_max {
+            rl.rlim_cur = rl.rlim_max;
+            let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &rl);
+        }
+    }
 
     // One lstat for the root itself (all children come from bulk enumeration).
     let root_meta = std::fs::symlink_metadata(&root)?;
