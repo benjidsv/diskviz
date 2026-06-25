@@ -1,9 +1,9 @@
 # diskviz
 
-A fast disk-usage visualizer for macOS. Point it at a folder (or your whole
-home directory) and it draws an interactive **TreeMap** and **Sunburst** of
-what's actually using your space — then lets you drill in and clear out the
-big stuff.
+A fast disk-usage visualizer for macOS and Windows. Point it at a folder (or
+your whole home directory) and it draws an interactive **TreeMap** and
+**Sunburst** of what's actually using your space — then lets you drill in and
+clear out the big stuff.
 
 Built with a parallel **Rust + Tauri** backend for speed, with a UI ported
 from [vizdisk](https://github.com/kiwamizamurai/vizdisk) (MIT). Themed with
@@ -54,30 +54,39 @@ the [Catppuccin](https://github.com/catppuccin/catppuccin) palette (MIT).
 
 The speed comes from three deliberate choices working together:
 
-1. **Parallel scan into a flat arena.** `src-tauri/src/scanner.rs` walks the
-   tree in parallel with [`jwalk`](https://crates.io/crates/jwalk) (the engine
-   behind `dust`), oversubscribing the thread pool ~2× cores to hide per-entry
-   `stat()` latency. Results land in a compact index-based `Vec<Node>` (indices,
-   not pointers — cache-friendly, and paths are reconstructed on demand rather
-   than stored). Directory sizes and file/dir counts are aggregated bottom-up in
-   a single reverse pass.
+1. **Platform-native bulk enumeration.** On macOS the scanner uses
+   `getattrlistbulk` as the sole enumeration primitive — each directory is
+   read once and returns name, allocated size, mtime, and inode in a single
+   syscall. On Windows, `GetFileInformationByHandleEx` (`FileIdBothDirectoryInfo`)
+   does the same. Both replace `jwalk` on their platform. A `Walker` enum
+   (`Custom` | `Jwalk` | `Default`) lets tests and the comparison harness pick
+   a specific back-end without env-var juggling; `scan()` always uses
+   `Walker::Default` (platform fast-path, env-var fallback).
 
-2. **The full tree stays in Rust.** It lives in Tauri managed state. The
+2. **Parallel walk into a flat arena.** Results land in a compact index-based
+   `Vec<Node>` (indices, not pointers — cache-friendly). Subdirectories are
+   recursed in parallel via `rayon`. Directory sizes, file/dir counts, per-dir
+   extension histograms, and age histograms are aggregated bottom-up in a
+   single reverse pass so navigation lookups are O(1).
+
+3. **The full tree stays in Rust.** It lives in Tauri managed state. The
    frontend never receives the whole tree — it pulls only the bounded slice it's
    currently rendering via `get_subtree(nodeId, maxDepth, maxChildren, offset)`,
    which also rolls up that subtree's file-type composition and median file age
    on demand, so IPC payloads stay tiny no matter how many millions of files
    were scanned.
 
-3. **Streamed progress.** The scan emits throttled `scan-progress` events
+4. **Streamed progress.** The scan emits throttled `scan-progress` events
    (~every 80 ms / 4k entries) that drive the determinate progress bar.
 
 ```
-┌──────────────┐   scan_directory(path)   ┌────────────────────────────┐
-│   React UI   │ ───────────────────────► │  Rust scanner (jwalk)      │
-│  TreeMap /   │ ◄─── scan-progress ───── │  → Vec<Node> in app state  │
-│   Sunburst   │   get_subtree(id,d,n)    │                            │
-└──────────────┘ ◄───── bounded slice ─── └────────────────────────────┘
+┌──────────────┐   scan_directory(path)   ┌────────────────────────────────┐
+│   React UI   │ ───────────────────────► │  Rust scanner                  │
+│  TreeMap /   │ ◄─── scan-progress ───── │  macOS: getattrlistbulk        │
+│   Sunburst   │   get_subtree(id,d,n)    │  Windows: FileIdBothDirInfo    │
+└──────────────┘ ◄───── bounded slice ─── │  fallback: jwalk               │
+                                          │  → Vec<Node> in app state      │
+                                          └────────────────────────────────┘
 ```
 
 ### Backend command surface
@@ -97,10 +106,12 @@ Defined in `src-tauri/src/commands.rs`, called from `src/lib/api.ts`:
 
 ## Tech stack
 
-- **Backend:** Rust, [Tauri v2](https://v2.tauri.app/), `jwalk`, `dashmap`,
-  `trash`, `libc`.
+- **Backend:** Rust, [Tauri v2](https://v2.tauri.app/), `rayon`, `jwalk`,
+  `dashmap`, `trash`, `libc`, `windows-sys`.
 - **Frontend:** React 19, TypeScript, Vite 7, Tailwind CSS v4, shadcn/ui
   (Radix primitives), Recharts, lucide-react.
+- **Testing:** [vitest](https://vitest.dev/) (frontend, 79 tests), `cargo test`
+  (Rust, 29 tests).
 
 ## Getting started
 
@@ -108,8 +119,8 @@ Defined in `src-tauri/src/commands.rs`, called from `src/lib/api.ts`:
 
 - [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
 - Node.js + npm
-- macOS (the scanner's allocated-size and firmlink handling are Unix-specific;
-  it builds on other platforms but is tuned for and tested on macOS)
+- macOS (primary target; also builds on Windows with the native fast-path
+  walker, but UI polish and testing are macOS-first)
 
 ### Develop
 
@@ -124,28 +135,58 @@ npm run tauri dev
 npm run tauri build
 ```
 
-## Benchmarking the scanner
+## Testing
 
-The scanner has a headless harness, independent of the UI:
+### Frontend tests (vitest)
 
 ```bash
-cd src-tauri
-cargo run --release --example scan -- /path/to/scan
+npm run test          # run once
+npm run test:watch    # watch mode
 ```
 
-Unit tests cover size/count aggregation:
+79 tests across five files: `formatters`, `colorScale`, `vizColor`,
+`TypeCompositionBar`, and `useTreeMapData`.
+
+### Rust tests
 
 ```bash
 cd src-tauri
 cargo test
 ```
 
+29 tests covering size/count aggregation, `extension_of`, `age_bucket`,
+`remove_subtree` ancestor propagation, `path_of`, `adaptive_visible_count`,
+`subtree_stats` median bucketing, the `flatten` arena invariant, and
+walker parity (macOS custom ↔ jwalk; Windows equivalent compiles but runs
+only on Windows).
+
+## Scanner comparison harness
+
+Runs every walker available on the current platform on the same path and
+prints a side-by-side results table with a speedup column:
+
+```bash
+cd src-tauri
+cargo run --release --example scan -- /path/to/scan
+```
+
+Flags:
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--runs N` | 1 | Average timing over N runs |
+| `--walker <name>` | *(all)* | Run only `custom` or `jwalk` |
+
+The harness flags any divergence in files / dirs / size across walkers and
+exits with code 1 if walkers disagree. Adding a future walker is a one-line
+entry in the `available_walkers()` list.
+
 ## Roadmap
 
-- **`getattrlistbulk` fast path (macOS).** The scan is currently syscall-bound:
-  one `lstat()` per entry. macOS's `getattrlistbulk` returns metadata for a whole
-  directory in a single syscall, skipping the per-file stat — the path to
-  WizTree-class throughput.
+- **MFT/WizTree-style Windows walker.** A third `Walker::Mft` variant that
+  reads the NTFS Master File Table directly (like WizTree) for whole-disk
+  scans. The `Walker` enum and `scan_with` seam are already in place;
+  adding it requires one new enum variant and one `match` arm.
 
 ## Credits & license
 

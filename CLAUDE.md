@@ -19,6 +19,15 @@ See [`docs/theming.md`](docs/theming.md) for the color system, Catppuccin palett
 npm run dev        # Vite only (port 1420, strictPort)
 npm run tauri dev  # full Tauri app
 npm run build      # tsc + vite build
+npm run test       # vitest (frontend unit tests, run-once)
+npm run test:watch # vitest (watch mode)
+```
+
+```bash
+cd src-tauri
+cargo test                                        # Rust unit tests
+cargo run --release --example scan -- <path>      # multi-walker comparison harness
+cargo run --release --example scan -- <path> --runs 3 --walker custom
 ```
 
 ## Key source files
@@ -65,6 +74,56 @@ src/
       popover.tsx                  # Radix Popover wrapper
       separator.tsx
 ```
+
+## Tests
+
+### Frontend (vitest 3, jsdom)
+
+Configured in `vite.config.ts` (`test.environment: "jsdom"`, `globals: true`).
+TypeScript globals come from `"types": ["vitest/globals"]` in `tsconfig.json`.
+Test files sit next to the source they cover (`*.test.ts`).
+
+| File | What's tested |
+| ---- | ------------- |
+| `src/utils/formatters.test.ts` | `formatFileSize`, `formatDuration`, `formatPercentage`, `formatAge`, `activeness` (fake timers) |
+| `src/lib/colorScale.test.ts` | `hexToRgb`, `relativeLuminance`, `readableInk`, `interpolateStops`, `rgbToCss` |
+| `src/components/charts/vizColor.test.ts` | `sizeColorRgb`, `neutralRgb`, `activenessColorRgb` |
+| `src/components/charts/TypeCompositionBar.test.ts` | `compositionSlices`, `topTypesText` |
+| `src/hooks/useTreeMapData.test.ts` | `OTHER_NODE_ID`, `isOtherNode` |
+
+### Rust (`cargo test`)
+
+| Module | What's tested |
+| ------ | ------------- |
+| `scanner/mod.rs` | `aggregates_sizes_and_counts`, `remove_subtree_bucket_consistency`, `macos_walker_parity`, `extension_of` (5 cases), `age_bucket` (4 cases), `remove_subtree` ancestor propagation + saturating-sub guard, `path_of`, `windows_walker_parity` (cfg windows) |
+| `commands.rs` | `adaptive_visible_count` (4 cases), `subtree_stats` (5 cases incl. median bucket) via `build_test_tree` helper |
+| `scanner/walk_common.rs` | `flatten` child-idx > parent-idx invariant + parent links |
+| `scanner/walk_macos.rs` | `walk_basic_tree`, `walk_cancel`, `walk_hardlink_dedup` |
+| `scanner/dirmeta.rs` | `dirmeta_parity` |
+
+## Walker API (`scanner/mod.rs`)
+
+```rust
+pub enum Walker { Default, Custom, Jwalk }
+
+// Explicit back-end selection — used by tests and the comparison harness.
+pub fn scan_with<F: FnMut(Progress)>(
+    root: PathBuf, cancel: Arc<AtomicBool>, on_progress: F, walker: Walker,
+) -> io::Result<ScanTree>;
+
+// Public API (Tauri commands): delegates to scan_with(.., Walker::Default).
+pub fn scan<F: FnMut(Progress)>(
+    root: PathBuf, cancel: Arc<AtomicBool>, on_progress: F,
+) -> io::Result<ScanTree>;
+```
+
+`Walker::Default` selects the platform fast-path (`walk_macos` / `walk_windows`)
+unless `DISKVIZ_NO_BULK=1` is set, in which case `jwalk` is used. Tests and
+the harness pass `Walker::Custom` or `Walker::Jwalk` directly so no env-var
+mutation is needed.
+
+Adding a future `Walker::Mft` variant requires: one enum variant + one
+`match` arm in `scan_with` + one entry in the harness's `available_walkers()`.
 
 ## Shell
 
