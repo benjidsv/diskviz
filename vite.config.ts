@@ -37,4 +37,14 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+
+  // ── Vitest configuration ───────────────────────────────────────────────────
+  test: {
+    // jsdom gives us window/document/etc for tests that import browser globals
+    environment: "jsdom",
+    // Expose describe/it/expect/vi globally (mirrors Jest API)
+    globals: true,
+    // Reuse the React plugin so JSX/TSX works in test files
+    plugins: [react()],
+  },
 }));
