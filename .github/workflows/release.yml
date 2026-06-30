@@ -42,6 +42,6 @@ jobs:
             1. Download `diskviz_*_universal.dmg`
             2. Open it and drag diskviz to Applications
             3. On first launch: right-click → Open (bypasses Gatekeeper on unsigned builds)
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: --target universal-apple-darwin
