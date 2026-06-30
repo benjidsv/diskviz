@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build (universal macOS)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "diskviz ${{ github.ref_name }}"
+          releaseBody: |
+            ## diskviz ${{ github.ref_name }}
+
+            **macOS universal binary** (Apple Silicon + Intel)
+
+            ### Install
+            1. Download `diskviz_*_universal.dmg`
+            2. Open it and drag diskviz to Applications
+            3. On first launch: right-click → Open (bypasses Gatekeeper on unsigned builds)
+          releaseDraft: true
+          prerelease: false
+          args: --target universal-apple-darwin
