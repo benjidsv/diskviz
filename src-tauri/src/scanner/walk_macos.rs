@@ -20,13 +20,20 @@ use rayon::prelude::*;
 use super::dirmeta;
 use super::walk_common::{emit_progress_if_due, flatten, Msg, RawNode, WalkStats};
 
+// ── Tuning knobs ─────────────────────────────────────────────────────────────
+
+/// Maximum recursion depth at which subdirectories are processed in parallel.
+/// Below this depth, `par_iter` is used (wide fan-out); at or beyond it,
+const PARALLEL_DEPTH: u32 = u32::MAX;
+
 // ── Recursive parallel walk ───────────────────────────────────────────────────
 
 /// Walk one directory and return its `RawNode` (with recursively built children).
 ///
-/// Parallelism: subdirectories are processed via `rayon::par_iter`; the caller
-/// must run this inside a `rayon::ThreadPool::install` scope so that nested
-/// par_iters all dispatch to the same pool.
+/// Parallelism: subdirectories are processed via `rayon::par_iter` when `depth
+/// < PARALLEL_DEPTH` and there are at least two subdirs; the caller must run
+/// this inside a `rayon::ThreadPool::install` scope so that nested par_iters
+/// all dispatch to the same pool.
 ///
 /// `visited` is shared across threads; it dedups hardlinked files (`nlink > 1`)
 /// and prevents re-entering directory symlinks or hardlinked directories.
@@ -43,6 +50,7 @@ fn walk_dir(
     stats:     &Arc<WalkStats>,
     denom:     u64,
     tx:        std::sync::mpsc::Sender<Msg>,
+    depth:     u32,
 ) -> RawNode {
     if cancel.load(Ordering::Relaxed) {
         return RawNode { name, size: 0, mtime, is_dir: true, is_hidden, children: vec![] };
@@ -104,16 +112,28 @@ fn walk_dir(
 
     emit_progress_if_due(&path.to_string_lossy(), stats, denom, &tx);
 
-    // Recurse into subdirectories in parallel. `par_iter` dispatches to the
-    // ThreadPool established by `walk()` via `pool.install()`.
-    let subdir_nodes: Vec<RawNode> = subdir_tasks
-        .into_par_iter()
-        .map(|(cname, cpath, cmtime, _dev, _ino)| {
-            let cis_hid = cname.starts_with('.');
-            walk_dir(cpath, cname, cmtime, cis_hid,
-                     visited, cancel, stats, denom, tx.clone())
-        })
-        .collect();
+    // Recurse into subdirectories. Parallelize only when shallow enough and
+    // there are at least two subdirs — a single subdir gains nothing from a
+    // rayon task, and deep tasks create more contention than throughput.
+    let subdir_nodes: Vec<RawNode> = if depth < PARALLEL_DEPTH && subdir_tasks.len() >= 2 {
+        subdir_tasks
+            .into_par_iter()
+            .map(|(cname, cpath, cmtime, _dev, _ino)| {
+                let cis_hid = cname.starts_with('.');
+                walk_dir(cpath, cname, cmtime, cis_hid,
+                         visited, cancel, stats, denom, tx.clone(), depth + 1)
+            })
+            .collect()
+    } else {
+        subdir_tasks
+            .into_iter()
+            .map(|(cname, cpath, cmtime, _dev, _ino)| {
+                let cis_hid = cname.starts_with('.');
+                walk_dir(cpath, cname, cmtime, cis_hid,
+                         visited, cancel, stats, denom, tx.clone(), depth + 1)
+            })
+            .collect()
+    };
 
     let mut children = file_nodes;
     children.extend(subdir_nodes);
@@ -197,7 +217,7 @@ pub fn walk<F: FnMut(super::Progress)>(
             walk_dir(
                 root2, root_name, root_mtime, false,
                 &visited2, &cancel2, &stats2, denom,
-                tx2.clone(),
+                tx2.clone(), 0,
             )
         });
         let _ = tx2.send(Msg::Done(root_node));
