@@ -2,6 +2,7 @@ import type React from "react";
 import { Fragment } from "react";
 import { ChevronLeftIcon, ChevronRightIcon, FolderOpenIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { combo } from "@/lib/platform";
 import { Dot } from "@/components/ui/dot";
 import { formatDuration, formatFileSize } from "@/utils/formatters";
 import type { FileNode, ScanSummary } from "@/types";
@@ -66,10 +67,10 @@ export const TopBar: React.FC<TopBarProps> = ({
 
       {/* Back / forward */}
       <div className="flex items-center gap-0.5 shrink-0">
-        <NavButton label="Go back (⌘Z)" disabled={!canGoBack} onClick={onBack}>
+        <NavButton label={`Go back (${combo("Z")})`} disabled={!canGoBack} onClick={onBack}>
           <ChevronLeftIcon className="h-4 w-4" />
         </NavButton>
-        <NavButton label="Go forward (⌘⇧Z)" disabled={!canGoForward} onClick={onForward}>
+        <NavButton label={`Go forward (${combo("Z", { shift: true })})`} disabled={!canGoForward} onClick={onForward}>
           <ChevronRightIcon className="h-4 w-4" />
         </NavButton>
       </div>
@@ -129,7 +130,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       <button
         type="button"
         onClick={onOpen}
-        title="Open folder (⌘O)"
+        title={`Open folder (${combo("O")})`}
         className="flex items-center gap-1.5 rounded-md border border-border/60 px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground hover:border-border focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring shrink-0"
       >
         <FolderOpenIcon className="h-3.5 w-3.5" />
