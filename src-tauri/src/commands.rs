@@ -328,6 +328,11 @@ fn dirs_home() -> PathBuf {
     if let Ok(h) = std::env::var("HOME") { return PathBuf::from(h); }
     #[cfg(windows)]
     if let Ok(h) = std::env::var("USERPROFILE") { return PathBuf::from(h); }
+    // Last-resort fallback if the env var is unset — "/" is meaningless on
+    // Windows, so pick a per-platform root that at least exists.
+    #[cfg(windows)]
+    return PathBuf::from("C:\\");
+    #[cfg(not(windows))]
     PathBuf::from("/")
 }
 

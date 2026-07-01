@@ -6,7 +6,12 @@ use std::path::Path;
 
 /// Metadata for a single directory entry from the bulk path.
 pub struct RawMeta {
-    /// Allocated bytes on disk (= `meta.blocks() * 512` for files; 0 for dirs).
+    /// File size in bytes; 0 for dirs. On Unix this is allocated bytes on
+    /// disk (`meta.blocks() * 512`); on Windows this is the logical file
+    /// length (`EndOfFile`), matching Explorer's "Size" column. Each
+    /// platform is internally consistent across its own code paths (native
+    /// bulk, jwalk, and `readdir_meta` fallback all agree), but the two
+    /// platforms measure size differently from each other by design.
     pub size: u64,
     /// Modification time, unix seconds.
     pub mtime: i64,
@@ -306,9 +311,13 @@ pub fn bulk_dir_meta(dir: &Path) -> Option<Vec<(String, RawMeta)>> {
                     let is_dir     = attrs & FILE_ATTRIBUTE_DIRECTORY != 0;
                     let is_reparse = attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0;
 
-                    // AllocationSize: i64 (LARGE_INTEGER). 0 for dirs.
-                    let alloc = rec.AllocationSize;
-                    let size  = if is_dir { 0 } else { alloc.max(0) as u64 };
+                    // EndOfFile: i64 (LARGE_INTEGER), logical file length. 0 for
+                    // dirs. Deliberately *not* AllocationSize (on-disk, cluster-
+                    // rounded) — logical size matches Explorer's "Size" column
+                    // and keeps this path consistent with the jwalk/readdir_meta
+                    // fallbacks below, which also report logical size on Windows.
+                    let eof  = rec.EndOfFile;
+                    let size = if is_dir { 0 } else { eof.max(0) as u64 };
 
                     // LastWriteTime: FILETIME stored as i64 (100-ns ticks since 1601).
                     let ft    = rec.LastWriteTime;
@@ -503,7 +512,7 @@ mod tests {
             .map(|(_, m)| m)
             .expect("a.txt missing from result");
         assert!(!a.is_dir, "a.txt should not be a directory");
-        assert!(a.size > 0, "a.txt should have non-zero allocated size");
+        assert!(a.size > 0, "a.txt should have non-zero size");
         // mtime should be a reasonably recent unix timestamp (after year 2000).
         assert!(a.mtime > 946_684_800, "mtime should be after year 2000");
         assert!(!a.is_reparse, "a.txt is not a reparse point");
