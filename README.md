@@ -132,7 +132,7 @@ npm run tauri dev
 ### Build a release bundle
 
 ```bash
-npm run tauri icon diskviz-icon.png # You can use diskviz-icon-shadow for macos
+npm run tauri icon icons/diskviz-icon.png # You can use icons/diskviz-icon-shadow.png for macos
 npm run tauri build
 ```
 
