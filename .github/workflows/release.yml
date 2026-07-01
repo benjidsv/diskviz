@@ -6,8 +6,19 @@ on:
       - "v*"
 
 jobs:
-  build-macos:
-    runs-on: macos-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: --target universal-apple-darwin
+          - platform: windows-latest
+            rust-targets: x86_64-pc-windows-msvc
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
     permissions:
       contents: write
 
@@ -21,12 +32,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.rust-targets }}
 
       - name: Install frontend deps
         run: npm ci
 
-      - name: Build (universal macOS)
+      - name: Build
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -36,12 +47,20 @@ jobs:
           releaseBody: |
             ## diskviz ${{ github.ref_name }}
 
-            **macOS universal binary** (Apple Silicon + Intel)
-
-            ### Install
+            ### macOS (universal: Apple Silicon + Intel)
             1. Download `diskviz_*_universal.dmg`
             2. Open it and drag diskviz to Applications
             3. On first launch: right-click → Open (bypasses Gatekeeper on unsigned builds)
-          releaseDraft: false
+
+            ### Windows (64-bit)
+            1. Download `diskviz_*_x64-setup.exe` (NSIS) or `diskviz_*_x64_en-US.msi` (MSI)
+            2. Run it and follow the installer
+            3. If SmartScreen warns about an unsigned app: "More info" → "Run anyway"
+          # Draft: both platforms in this matrix run in parallel and upload to
+          # the same tagged release, so the release is left as a draft until
+          # every job finishes — publish it manually once all assets are
+          # attached. (Auto-publishing here would risk a reader seeing a
+          # "finished" release with only one platform's assets.)
+          releaseDraft: true
           prerelease: false
-          args: --target universal-apple-darwin
+          args: ${{ matrix.args }}

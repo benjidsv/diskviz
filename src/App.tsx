@@ -20,6 +20,7 @@ import {
   validatePath,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { combo } from "@/lib/platform";
 import { isOtherNode } from "@/hooks/useTreeMapData";
 import type { FileNode, ScanProgress as Progress, ScanSummary } from "@/types";
 import SunburstChart from "@/components/charts/SunburstChart";
@@ -486,7 +487,7 @@ function App() {
               </p>
             </div>
             <Button onClick={handleFolderPicker}>Browse…</Button>
-            <p className="micro-label text-muted-foreground">Open folder · ⌘O</p>
+            <p className="micro-label text-muted-foreground">Open folder · {combo("O")}</p>
           </div>
         )}
       </main>
@@ -588,7 +589,7 @@ function App() {
               size="sm"
               onClick={() => setShowShortcuts((s) => !s)}
               className="gap-1.5"
-              title="Keyboard shortcuts (⌘?)"
+              title={`Keyboard shortcuts (${combo("?")})`}
             >
               <KeyboardIcon className="w-3.5 h-3.5" />
               Shortcuts
@@ -618,14 +619,14 @@ function App() {
           onClose={() => setShowShortcuts(false)}
         >
           <div className="space-y-3 text-sm">
-            <ShortcutRow label="Open folder" keys={["⌘O"]} />
+            <ShortcutRow label="Open folder" keys={[combo("O")]} />
             <ShortcutRow label="Drill into folder" keys={["Double-click"]} />
             <ShortcutRow label="Select an item" keys={["Click"]} />
             <ShortcutRow label="Deselect / dismiss" keys={["Esc"]} />
-            <ShortcutRow label="Navigate back / forward" keys={["⌘Z", "⌘⇧Z"]} />
+            <ShortcutRow label="Navigate back / forward" keys={[combo("Z"), combo("Z", { shift: true })]} />
             <ShortcutRow label="Swipe to navigate back / forward" keys={["← →"]} />
             <ShortcutRow label="Jump to an ancestor" keys={["Click breadcrumb"]} />
-            <ShortcutRow label="Show shortcuts" keys={["⌘?"]} />
+            <ShortcutRow label="Show shortcuts" keys={[combo("?")]} />
           </div>
         </Modal>
       )}

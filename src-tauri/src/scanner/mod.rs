@@ -563,7 +563,30 @@ fn volume_used_bytes(path: &std::path::Path) -> Option<u64> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn volume_used_bytes(path: &std::path::Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    // GetDiskFreeSpaceExW resolves the volume that contains `path` — it need
+    // not be a root path — so pass the scan root directly.
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0u16))
+        .collect();
+
+    let mut free_available = 0u64;
+    let mut total = 0u64;
+    let mut total_free = 0u64;
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(wide.as_ptr(), &mut free_available, &mut total, &mut total_free)
+    };
+    if ok == 0 { return None; }
+    Some(total.saturating_sub(total_free))
+}
+
+#[cfg(not(any(unix, windows)))]
 fn volume_used_bytes(_path: &std::path::Path) -> Option<u64> { None }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -899,7 +922,11 @@ mod tests {
 
     /// Windows parity: the custom GetFileInformationByHandleEx walker and the
     /// jwalk fallback must yield identical file counts, dir counts, and total
-    /// sizes on the same fixture tree.
+    /// sizes on the same fixture tree. File sizes are deliberately *not*
+    /// cluster-aligned (NTFS clusters are typically 4096 bytes) — both paths
+    /// report logical size (`EndOfFile` / `len()`), so this only passes if
+    /// that holds; cluster-aligned fixtures would pass even if one path
+    /// still reported allocated (on-disk) size instead.
     #[test]
     #[cfg(target_os = "windows")]
     fn windows_walker_parity() {
@@ -907,11 +934,11 @@ mod tests {
             .join(format!("diskviz_win_parity_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("sub\\deep")).unwrap();
-        fs::write(root.join("a.rs"),              vec![0u8; 4096]).unwrap();
-        fs::write(root.join("sub\\b.toml"),       vec![0u8; 4096]).unwrap();
-        fs::write(root.join("sub\\c.toml"),       vec![0u8; 4096]).unwrap();
-        fs::write(root.join("sub\\deep\\d.rs"),   vec![0u8; 4096]).unwrap();
-        fs::write(root.join(".hidden"),            vec![0u8; 4096]).unwrap();
+        fs::write(root.join("a.rs"),              vec![0u8; 100]).unwrap();
+        fs::write(root.join("sub\\b.toml"),       vec![0u8; 1500]).unwrap();
+        fs::write(root.join("sub\\c.toml"),       vec![0u8; 777]).unwrap();
+        fs::write(root.join("sub\\deep\\d.rs"),   vec![0u8; 9001]).unwrap();
+        fs::write(root.join(".hidden"),            vec![0u8; 33]).unwrap();
 
         let cancel1 = Arc::new(AtomicBool::new(false));
         let cancel2 = Arc::new(AtomicBool::new(false));
