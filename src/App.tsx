@@ -1,4 +1,4 @@
-import { BarChart3, HardDriveIcon, History, InfoIcon, KeyboardIcon, Ruler, Target } from "lucide-react";
+import { BarChart3, History, InfoIcon, KeyboardIcon, Ruler, Target } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -34,6 +34,7 @@ import Modal from "@/components/ui/modal";
 import { AccentPicker } from "@/components/AccentPicker";
 import { ThemePicker } from "@/components/ThemePicker";
 import { showBreadcrumbContextMenu } from "@/hooks/useNativeContextMenu";
+import appIcon from "@/assets/diskviz-icon-transparent.png";
 
 function App() {
   const [summary, setSummary] = useState<ScanSummary | null>(null);
@@ -471,9 +472,11 @@ function App() {
               isDragOver && "bg-primary/5 outline-dashed outline-2 outline-primary/40",
             )}
           >
-            <div className={cn("p-6 rounded-full transition-colors", isDragOver ? "bg-primary/15" : "bg-muted/30")}>
-              <HardDriveIcon className={cn("h-12 w-12", isDragOver ? "text-primary" : "text-muted-foreground")} />
-            </div>
+            <img
+              src={appIcon}
+              alt=""
+              className={cn("h-48 w-48 transition-opacity", isDragOver ? "opacity-100" : "opacity-90")}
+            />
             <div className="text-center space-y-2">
               <h3 className="text-xl font-semibold text-foreground">
                 {isDragOver ? "Drop to analyze" : "Choose a directory"}

@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { Dot } from "@/components/ui/dot";
 import { formatDuration, formatFileSize } from "@/utils/formatters";
 import type { FileNode, ScanSummary } from "@/types";
+import appIcon from "@/assets/diskviz-icon-transparent.png";
 
 interface TopBarProps {
   breadcrumbs: FileNode[];
@@ -56,9 +57,12 @@ export const TopBar: React.FC<TopBarProps> = ({
   return (
     <header className="flex items-center gap-3 border-b border-border/60 bg-muted/30 px-4 py-2 flex-shrink-0">
       {/* Brand */}
-      <span className="micro-label font-semibold text-foreground tracking-[0.18em] shrink-0 select-none">
-        DISKVIZ
-      </span>
+      <div className="flex items-center gap-1.5 shrink-0 select-none">
+        <img src={appIcon} alt="" className="h-6 w-6" />
+        <span className="micro-label font-semibold text-foreground tracking-[0.18em]">
+          DISKVIZ
+        </span>
+      </div>
 
       {/* Back / forward */}
       <div className="flex items-center gap-0.5 shrink-0">

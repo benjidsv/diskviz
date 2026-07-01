@@ -12,6 +12,34 @@ import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import { TreeMapTooltip } from "./TreeMapTooltip";
 import { showNodeContextMenu } from "@/hooks/useNativeContextMenu";
 
+const OUTER_CORNER_RADIUS = 12;
+const CORNER_EPSILON = 0.5;
+
+interface CornerRadii {
+  tl: number;
+  tr: number;
+  br: number;
+  bl: number;
+}
+
+// Rect path with independently-radiused corners: a 0 radius on a corner
+// renders as a plain right angle (SVG treats a 0-radius arc as a straight line).
+function roundedRectPath(x: number, y: number, width: number, height: number, r: CornerRadii) {
+  const { tl, tr, br, bl } = r;
+  return [
+    `M ${x + tl},${y}`,
+    `H ${x + width - tr}`,
+    `A ${tr},${tr} 0 0 1 ${x + width},${y + tr}`,
+    `V ${y + height - br}`,
+    `A ${br},${br} 0 0 1 ${x + width - br},${y + height}`,
+    `H ${x + bl}`,
+    `A ${bl},${bl} 0 0 1 ${x},${y + height - bl}`,
+    `V ${y + tl}`,
+    `A ${tl},${tl} 0 0 1 ${x + tl},${y}`,
+    "Z",
+  ].join(" ");
+}
+
 interface TreeMapChartProps {
   data: FileNode;
   rampStops: string[];
@@ -71,6 +99,7 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
     name: string;
     size: number;
     originalNode: FileNode;
+    root: { x: number; y: number; width: number; height: number };
   }
 
   const CustomContent: React.FC<CustomContentProps> = ({
@@ -81,6 +110,7 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
     name,
     size,
     originalNode,
+    root,
   }) => {
     if (!originalNode || typeof width !== "number" || typeof height !== "number") {
       return null;
@@ -95,6 +125,24 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
     if (adjustedWidth <= 0 || adjustedHeight <= 0) {
       return null;
     }
+
+    // Only the tile occupying a given outer corner of the whole treemap gets
+    // that one corner rounded; every other corner/tile stays square.
+    const atLeft = Math.abs(x - root.x) < CORNER_EPSILON;
+    const atTop = Math.abs(y - root.y) < CORNER_EPSILON;
+    const atRight = Math.abs(x + width - (root.x + root.width)) < CORNER_EPSILON;
+    const atBottom = Math.abs(y + height - (root.y + root.height)) < CORNER_EPSILON;
+    const cornerRadius = Math.max(
+      0,
+      Math.min(OUTER_CORNER_RADIUS, adjustedWidth / 2, adjustedHeight / 2),
+    );
+    const radii: CornerRadii = {
+      tl: atLeft && atTop ? cornerRadius : 0,
+      tr: atRight && atTop ? cornerRadius : 0,
+      br: atRight && atBottom ? cornerRadius : 0,
+      bl: atLeft && atBottom ? cornerRadius : 0,
+    };
+    const hasRoundedCorner = radii.tl > 0 || radii.tr > 0 || radii.br > 0 || radii.bl > 0;
 
     const isSmall = adjustedWidth < 40 || adjustedHeight < 20;
     const fontSize = Math.max(
@@ -160,17 +208,24 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
         onMouseLeave={handleMouseLeave}
         onKeyDown={handleKeyDown}
       >
-        <rect
-          x={adjustedX}
-          y={adjustedY}
-          width={adjustedWidth}
-          height={adjustedHeight}
-          fill={fillCss}
-          stroke={isSelected ? "var(--primary)" : "var(--viz-stroke)"}
-          strokeWidth={isSelected ? 2 : isSmall ? 0.5 : 1}
-          rx={4}
-          ry={4}
-        />
+        {hasRoundedCorner ? (
+          <path
+            d={roundedRectPath(adjustedX, adjustedY, adjustedWidth, adjustedHeight, radii)}
+            fill={fillCss}
+            stroke={isSelected ? "var(--primary)" : "var(--viz-stroke)"}
+            strokeWidth={isSelected ? 2 : isSmall ? 0.5 : 1}
+          />
+        ) : (
+          <rect
+            x={adjustedX}
+            y={adjustedY}
+            width={adjustedWidth}
+            height={adjustedHeight}
+            fill={fillCss}
+            stroke={isSelected ? "var(--primary)" : "var(--viz-stroke)"}
+            strokeWidth={isSelected ? 2 : isSmall ? 0.5 : 1}
+          />
+        )}
 
         {shouldShowText && (
           <>
