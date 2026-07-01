@@ -31,3 +31,7 @@ dist-ssr
 *.trace
 profile.json.gz
 flamegraph.svg
+
+# Icons
+src-tauri/icons
+src-tauri/icons-backup
