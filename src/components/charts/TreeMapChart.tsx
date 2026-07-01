@@ -97,6 +97,7 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
     }
 
     const isSmall = adjustedWidth < 40 || adjustedHeight < 20;
+    const cornerRadius = Math.max(0, Math.min(8, adjustedWidth / 4, adjustedHeight / 4));
     const fontSize = Math.max(
       isSmall ? 8 : 10,
       Math.min(adjustedWidth / 6, adjustedHeight / 3, 16),
@@ -168,8 +169,8 @@ const TreeMapChart: React.FC<TreeMapChartProps> = ({
           fill={fillCss}
           stroke={isSelected ? "var(--primary)" : "var(--viz-stroke)"}
           strokeWidth={isSelected ? 2 : isSmall ? 0.5 : 1}
-          rx={4}
-          ry={4}
+          rx={cornerRadius}
+          ry={cornerRadius}
         />
 
         {shouldShowText && (
