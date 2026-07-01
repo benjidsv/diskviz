@@ -24,32 +24,18 @@ pub fn run() {
             commands::open_in_finder,
         ])
         .setup(|app| {
-            // ── File menu ────────────────────────────────────────────────
+            // ── Shared items (identical id/label on every platform) ──────
             let open_item = MenuItem::with_id(
                 app, "open-folder", "Open Folder…", true, Some("CmdOrCtrl+O"),
             )?;
-            let file_menu = Submenu::with_items(
-                app, "File", true,
-                &[
-                    &open_item,
-                    &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::close_window(app, None)?,
-                ],
-            )?;
-
-            // ── View menu ────────────────────────────────────────────────
             let viz_treemap = MenuItem::with_id(
                 app, "viz-treemap", "Treemap", true, None::<&str>,
             )?;
             let viz_sunburst = MenuItem::with_id(
                 app, "viz-sunburst", "Sunburst", true, None::<&str>,
             )?;
-            let view_menu = Submenu::with_items(
-                app, "View", true,
-                &[&viz_treemap, &viz_sunburst],
-            )?;
 
-            // ── Window / Theme submenu ───────────────────────────────────
+            // ── Theme submenu ─────────────────────────────────────────────
             let theme_system    = MenuItem::with_id(app, "theme-system",    "System",    true, None::<&str>)?;
             let theme_latte     = MenuItem::with_id(app, "theme-latte",     "Latte",     true, None::<&str>)?;
             let theme_frappe    = MenuItem::with_id(app, "theme-frappe",    "Frappé",    true, None::<&str>)?;
@@ -64,7 +50,7 @@ pub fn run() {
                 ],
             )?;
 
-            // ── Window / Accent submenu ──────────────────────────────────
+            // ── Accent submenu ────────────────────────────────────────────
             let acc_rosewater = MenuItem::with_id(app, "accent-rosewater", "Rosewater", true, None::<&str>)?;
             let acc_flamingo  = MenuItem::with_id(app, "accent-flamingo",  "Flamingo",  true, None::<&str>)?;
             let acc_pink      = MenuItem::with_id(app, "accent-pink",      "Pink",      true, None::<&str>)?;
@@ -91,46 +77,15 @@ pub fn run() {
                 ],
             )?;
 
-            let window_menu = Submenu::with_items(
-                app, "Window", true,
-                &[
-                    &PredefinedMenuItem::minimize(app, None)?,
-                    &PredefinedMenuItem::maximize(app, None)?,
-                    &PredefinedMenuItem::fullscreen(app, None)?,
-                    &PredefinedMenuItem::separator(app)?,
-                    &theme_submenu,
-                    &accent_submenu,
-                    &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::bring_all_to_front(app, None)?,
-                ],
-            )?;
-
-            // ── diskviz app menu ─────────────────────────────────────────
+            // ── Help/app items ────────────────────────────────────────────
             let shortcuts_item = MenuItem::with_id(
                 app, "show-shortcuts", "Keyboard Shortcuts", true, Some("CmdOrCtrl+Shift+/"),
             )?;
             let notices_item = MenuItem::with_id(
                 app, "show-notices", "Open Source Notices", true, None::<&str>,
             )?;
-            let app_menu = Submenu::with_items(
-                app, "diskviz", true,
-                &[
-                    &PredefinedMenuItem::about(app, None, None)?,
-                    &PredefinedMenuItem::separator(app)?,
-                    &shortcuts_item,
-                    &notices_item,
-                    &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::services(app, None)?,
-                    &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::hide(app, None)?,
-                    &PredefinedMenuItem::hide_others(app, None)?,
-                    &PredefinedMenuItem::show_all(app, None)?,
-                    &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::quit(app, None)?,
-                ],
-            )?;
 
-            // ── Edit menu ────────────────────────────────────────────────
+            // ── Edit menu (cross-platform predefined items) ──────────────
             let edit_menu = Submenu::with_items(
                 app, "Edit", true,
                 &[
@@ -144,11 +99,97 @@ pub fn run() {
                 ],
             )?;
 
-            // ── Assemble & install ───────────────────────────────────────
-            let menu = Menu::with_items(
-                app,
-                &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu],
-            )?;
+            // ── Platform-specific menu bar assembly ───────────────────────
+            // macOS gets the full app-menu convention (About/Services/Hide/
+            // Quit under the app name, a Window menu with the OS window
+            // items). Everything else gets a conventional File/Edit/View/
+            // Help bar — the macOS-only predefined items (services,
+            // hide_others, show_all, bring_all_to_front) simply don't exist
+            // there, and there's no "app menu" concept to hang them on.
+            #[cfg(target_os = "macos")]
+            let menu = {
+                let file_menu = Submenu::with_items(
+                    app, "File", true,
+                    &[
+                        &open_item,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::close_window(app, None)?,
+                    ],
+                )?;
+                let view_menu = Submenu::with_items(
+                    app, "View", true,
+                    &[&viz_treemap, &viz_sunburst],
+                )?;
+                let window_menu = Submenu::with_items(
+                    app, "Window", true,
+                    &[
+                        &PredefinedMenuItem::minimize(app, None)?,
+                        &PredefinedMenuItem::maximize(app, None)?,
+                        &PredefinedMenuItem::fullscreen(app, None)?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &theme_submenu,
+                        &accent_submenu,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::bring_all_to_front(app, None)?,
+                    ],
+                )?;
+                let app_menu = Submenu::with_items(
+                    app, "diskviz", true,
+                    &[
+                        &PredefinedMenuItem::about(app, None, None)?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &shortcuts_item,
+                        &notices_item,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::services(app, None)?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::hide(app, None)?,
+                        &PredefinedMenuItem::hide_others(app, None)?,
+                        &PredefinedMenuItem::show_all(app, None)?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::quit(app, None)?,
+                    ],
+                )?;
+                Menu::with_items(
+                    app,
+                    &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu],
+                )?
+            };
+
+            #[cfg(not(target_os = "macos"))]
+            let menu = {
+                let file_menu = Submenu::with_items(
+                    app, "File", true,
+                    &[
+                        &open_item,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::close_window(app, None)?,
+                    ],
+                )?;
+                let view_menu = Submenu::with_items(
+                    app, "View", true,
+                    &[
+                        &viz_treemap, &viz_sunburst,
+                        &PredefinedMenuItem::separator(app)?,
+                        &theme_submenu,
+                        &accent_submenu,
+                    ],
+                )?;
+                let help_menu = Submenu::with_items(
+                    app, "Help", true,
+                    &[
+                        &PredefinedMenuItem::about(app, None, None)?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &shortcuts_item,
+                        &notices_item,
+                    ],
+                )?;
+                Menu::with_items(
+                    app,
+                    &[&file_menu, &edit_menu, &view_menu, &help_menu],
+                )?
+            };
+
             app.set_menu(menu)?;
 
             // ── Route menu events to the frontend ────────────────────────
